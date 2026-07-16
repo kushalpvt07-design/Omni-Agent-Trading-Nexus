@@ -17,3 +17,4 @@ class FinancialSwarmState(TypedDict):
     
     proposed_trade: Dict[str, Any]
     risk_approved: bool
+    paper_trading_enabled: bool

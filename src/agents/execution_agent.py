@@ -2,13 +2,15 @@ import os
 import json
 from langchain_core.messages import AIMessage
 from src.state import FinancialSwarmState
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 
-# A simple file-based ledger to simulate a live brokerage portfolio balance
 LEDGER_FILE = "portfolio_ledger.json"
 
+# -- Local Ledger Functions (Unchanged) --
 def load_ledger():
     if not os.path.exists(LEDGER_FILE):
-        # Initialize with $100,000 cash and an empty positions list
         initial_ledger = {"cash": 100000.0, "positions": {}}
         with open(LEDGER_FILE, "w") as f:
             json.dump(initial_ledger, f, indent=4)
@@ -21,57 +23,78 @@ def save_ledger(ledger):
         json.dump(ledger, f, indent=4)
 
 async def execution_agent_node(state: FinancialSwarmState) -> dict:
-    """
-    The Execution Agent. Simulates order routing to a brokerage,
-    calculates cash balances, and updates the local ledger.
-    """
     trade = state.get("proposed_trade", {})
-    ticker = trade.get("ticker")
-    action = trade.get("action")
+    action = trade.get("action", "HOLD")
     shares = trade.get("shares", 0)
+    ticker = trade.get("ticker", "UNKNOWN")
     
-    # If the orchestrator decided to HOLD, wrap it up immediately
-    if not action or action == "HOLD" or shares <= 0:
+    # NEW: Check if the UI toggled Paper Trading on
+    is_paper_trading = state.get("paper_trading_enabled", False)
+
+    if action == "HOLD" or shares <= 0:
         return {"messages": [AIMessage(content="Execution Engine: No action taken. Pipeline finished with HOLD status.")]}
     
-    # In production, this mock price would come from a real-time WebSocket feed
-    mock_market_price = 150.0 
-    total_cost = mock_market_price * shares
-    
-    print(f"\n⚡ Execution Engine: Routing {action} order for {shares} shares of {ticker} to market...")
-    
-    ledger = load_ledger()
-    
-    if action == "BUY":
-        if ledger["cash"] < total_cost:
-            error_msg = f"TRADE REJECTED: Insufficient funds. Required: ${total_cost:.2f}, Available: ${ledger['cash']:.2f}"
-            print(f"❌ {error_msg}")
-            return {"errors": [error_msg]}
-        
-        # Deduct cash and update position
-        ledger["cash"] -= total_cost
-        ledger["positions"][ticker] = ledger["positions"].get(ticker, 0) + shares
-        
-    elif action == "SELL":
-        current_shares = ledger["positions"].get(ticker, 0)
-        if current_shares < shares:
-            error_msg = f"TRADE REJECTED: Insufficient shares. Trying to sell {shares}, but only own {current_shares}."
-            print(f"❌ {error_msg}")
-            return {"errors": [error_msg]}
-        
-        # Add cash and reduce position
-        ledger["cash"] += total_cost
-        ledger["positions"][ticker] -= shares
-        if ledger["positions"][ticker] == 0:
-            del ledger["positions"][ticker]
+    # ---------------------------------------------------------
+    # ROUTE A: LIVE PAPER TRADING (ALPACA)
+    # ---------------------------------------------------------
+    if is_paper_trading:
+        try:
+            api_key = os.environ.get("ALPACA_API_KEY")
+            secret_key = os.environ.get("ALPACA_SECRET_KEY")
+            
+            if not api_key or not secret_key:
+                return {"errors": ["Alpaca keys missing from .env file."]}
 
-    save_ledger(ledger)
-    
-    execution_report = (
-        f"✅ **Brokerage Order Executed Successfully!**\n"
-        f"**Filled:** {action} {shares} shares of {ticker} @ ${mock_market_price:.2f}\n"
-        f"**Total Transaction Value:** ${total_cost:.2f}\n"
-        f"**Remaining Cash Portfolio Balance:** ${ledger['cash']:.2f}"
-    )
-    
-    return {"messages": [AIMessage(content=execution_report)]}
+            # Initialize the modern Trading Client
+            trading_client = TradingClient(api_key, secret_key, paper=True)
+            
+            # Format the order request
+            market_order_data = MarketOrderRequest(
+                symbol=ticker,
+                qty=shares,
+                side=OrderSide.BUY if action == "BUY" else OrderSide.SELL,
+                time_in_force=TimeInForce.GTC
+            )
+            
+            # Submit the order to the live market
+            order = trading_client.submit_order(order_data=market_order_data)
+            
+            report = (
+                f"📈 **ALPACA LIVE EXECUTION SUCCESS**\n"
+                f"**Order ID:** {order.id}\n"
+                f"**Filled:** {action} {shares} shares of {ticker} on the live order book."
+            )
+            return {"messages": [AIMessage(content=report)]}
+            
+        except Exception as e:
+            return {"errors": [f"Alpaca Execution Failed: {str(e)}"]}
+
+    # ---------------------------------------------------------
+    # ROUTE B: LOCAL MOCK LEDGER
+    # ---------------------------------------------------------
+    else:
+        mock_market_price = 150.0 
+        total_cost = mock_market_price * shares
+        ledger = load_ledger()
+        
+        if action == "BUY":
+            if ledger["cash"] < total_cost:
+                return {"errors": [f"Insufficient funds. Required: ${total_cost:.2f}"]}
+            ledger["cash"] -= total_cost
+            ledger["positions"][ticker] = ledger["positions"].get(ticker, 0) + shares
+            
+        elif action == "SELL":
+            if ledger["positions"].get(ticker, 0) < shares:
+                return {"errors": ["Insufficient shares."]}
+            ledger["cash"] += total_cost
+            ledger["positions"][ticker] -= shares
+            if ledger["positions"][ticker] == 0:
+                del ledger["positions"][ticker]
+
+        save_ledger(ledger)
+        report = (
+            f"✅ **LOCAL LEDGER EXECUTED**\n"
+            f"**Filled:** {action} {shares} shares of {ticker} @ ${mock_market_price:.2f}\n"
+            f"**Remaining Cash:** ${ledger['cash']:.2f}"
+        )
+        return {"messages": [AIMessage(content=report)]}
