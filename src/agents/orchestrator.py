@@ -20,12 +20,26 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     quant_data = state.get("quant_data", {})
     sentiment_data = state.get("sentiment_data", {})
 
-    # 2. Initialize the FREE Gemini Model
-    # We use Flash because it is lightning fast and included in the free tier
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.0)
+    # 2. Initialize the Gemini Model with a robust fallback list
+    models_to_try = [
+        "gemini-3.5-flash",
+        "gemini-3-flash",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-live",
+        "gemini-flash-latest",
+        "gemini-2.5-flash"
+    ]
     
-    # Bind our Pydantic schema to Gemini
-    structured_llm = llm.with_structured_output(TradeDecision)
+    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
+    structured_llm = primary_llm.with_structured_output(TradeDecision)
+    
+    fallbacks = [
+        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(TradeDecision)
+        for m in models_to_try[1:]
+    ]
+    
+    structured_llm = structured_llm.with_fallbacks(fallbacks)
 
     system_prompt = (
         "You are an elite autonomous financial orchestrator. "

@@ -1,0 +1,70 @@
+import os
+import json
+from langchain_core.messages import AIMessage
+from src.state import FinancialSwarmState
+
+LEDGER_FILE = "portfolio_ledger.json"
+
+def get_available_cash():
+    """Reads the ledger to see how much money you haven't lost yet."""
+    if not os.path.exists(LEDGER_FILE):
+        return 100000.0 # Default starting cash
+    try:
+        with open(LEDGER_FILE, "r") as f:
+            return json.load(f).get("cash", 100000.0)
+    except Exception:
+        return 0.0 # If the file is locked or corrupted, assume zero cash to freeze trading
+
+async def risk_agent_node(state: FinancialSwarmState) -> dict:
+    """
+    The Risk Desk. Intercepts the Orchestrator's proposal and runs compliance checks.
+    If the trade violates risk parameters, it forcefully overrides the state.
+    """
+    trade = state.get("proposed_trade", {})
+    action = trade.get("action", "HOLD")
+    shares = trade.get("shares", 0)
+    ticker = trade.get("ticker", "UNKNOWN")
+
+    # Pass-through if no action is required
+    if action == "HOLD" or shares <= 0:
+        return {
+            "risk_approved": True, 
+            "messages": [AIMessage(content="🛡️ Risk Desk: No active trade proposed. Cleared.")]
+        }
+
+    # For testing, we keep the mock price. In production, this pulls from Quant memory.
+    mock_price = 150.0 
+    trade_value = mock_price * shares
+    cash_available = get_available_cash()
+
+    # THE RULE: Max 20% cash allocation per trade
+    max_allowed_spend = cash_available * 0.20
+
+    print(f"\n🛡️ Risk Desk analyzing {action} order for {shares} shares of {ticker}...")
+
+    if action == "BUY" and trade_value > max_allowed_spend:
+        reject_msg = (
+            f"⛔ RISK DESK REJECTION: Trade value (${trade_value:,.2f}) exceeds the 20% "
+            f"maximum cash allocation limit (${max_allowed_spend:,.2f}). Overriding to HOLD."
+        )
+        
+        # Forcefully overwrite the Orchestrator's trade with a dead HOLD order
+        overridden_trade = {
+            "ticker": ticker,
+            "action": "HOLD",
+            "shares": 0,
+            "estimated_price": 0.0
+        }
+        
+        return {
+            "risk_approved": False, 
+            "proposed_trade": overridden_trade, 
+            "messages": [AIMessage(content=reject_msg)]
+        }
+
+    approve_msg = f"✅ RISK DESK APPROVAL: Trade value (${trade_value:,.2f}) is within compliance limits. Routing to Human Checkpoint."
+
+    return {
+        "risk_approved": True, 
+        "messages": [AIMessage(content=approve_msg)]
+    }

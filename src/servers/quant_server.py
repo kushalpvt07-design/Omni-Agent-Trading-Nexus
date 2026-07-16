@@ -1,68 +1,56 @@
 import json
-import random
-from datetime import datetime, timedelta
+import yfinance as yf
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP named "QuantServer"
 mcp = FastMCP("QuantServer")
 
-def generate_mock_history(ticker: str, days: int = 5) -> list:
-    """Helper to generate consistent financial mock data for testing."""
-    random.seed(ticker)  # Ensures the same ticker gives stable mock results
-    base_price = {"AAPL": 175.0, "MSFT": 420.0, "GOOGL": 150.0, "NVDA": 850.0}.get(ticker, 100.0)
-    
-    history = []
-    current_date = datetime.now()
-    
-    for i in range(days):
-        date_str = (current_date - timedelta(days=i)).strftime("%Y-%m-%d")
-        change = random.uniform(-0.03, 0.03)
-        close_price = round(base_price * (1 + change), 2)
-        volume = random.randint(1000000, 5000000)
-        
-        history.append({
-            "date": date_str,
-            "close": close_price,
-            "volume": volume
-        })
-    return history
-
 @mcp.tool()
 def get_daily_close_price(ticker: str) -> str:
     """
-    Fetches the latest daily closing price, volume, and 5-day historical trend 
-    for a given equity ticker symbol.
+    Fetches the actual live/latest daily closing price, volume, and 5-day historical trend 
+    for a given equity ticker symbol from Yahoo Finance.
     """
     ticker_upper = ticker.upper().strip()
+    # Strip out any punctuation the LLM might have accidentally included
+    ticker_upper = ''.join(e for e in ticker_upper if e.isalnum())
     
-    # Contextual check to make sure the agent sent a clean ticker
     if not ticker_upper or len(ticker_upper) > 5:
         return json.dumps({"status": "error", "message": "Invalid ticker symbol format."})
     
-    # -----------------------------------------------------------------
-    # PRODUCTION NOTE: To connect a real financial API later, you would replace
-    # this block with an actual API call, e.g.:
-    # data = requests.get(f"https://api.provider.com/quote?symbol={ticker_upper}").json()
-    # -----------------------------------------------------------------
-    
     try:
-        history = generate_mock_history(ticker_upper, days=5)
-        latest = history[0]
+        # Fetch live data from Yahoo Finance
+        stock = yf.Ticker(ticker_upper)
+        hist = stock.history(period="5d")
+        
+        if hist.empty:
+            return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}. It might be delisted or invalid."})
+
+        # Format the 5-day trend
+        history_data = []
+        for date, row in hist.iterrows():
+            history_data.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "close": round(row["Close"], 2),
+                "volume": int(row["Volume"])
+            })
+            
+        # Sort so the newest date is first
+        history_data.reverse()
+        latest = history_data[0]
         
         payload = {
             "status": "success",
             "ticker": ticker_upper,
-            "timestamp": datetime.now().isoformat(),
             "latest_close": latest["close"],
             "latest_volume": latest["volume"],
-            "five_day_trend": history
+            "five_day_trend": history_data
         }
         
         return json.dumps(payload, indent=2)
         
     except Exception as e:
-        return json.dumps({"status": "error", "message": f"Failed to retrieve data: {str(e)}"})
+        return json.dumps({"status": "error", "message": f"Failed to retrieve live data: {str(e)}"})
 
 if __name__ == "__main__":
-    # Launch the MCP server via the standard stdio transport layer
     mcp.run()
