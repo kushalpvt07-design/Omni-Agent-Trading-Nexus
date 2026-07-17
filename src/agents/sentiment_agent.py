@@ -8,9 +8,15 @@ import json
 class TickerExtraction(BaseModel):
     ticker: str = Field(description="The exact 1 to 5 letter stock ticker symbol (e.g., AAPL, TSLA, MSFT). If none is found, return 'UNKNOWN'.")
 
+from langchain_core.messages import HumanMessage
+
 async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
-    latest_message = state["messages"][-1].content if state["messages"] else ""
-    
+    latest_message = ""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            latest_message = msg.content
+            break
+
     # --- The LLM Extractor Upgrade ---
     extractor_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
     structured_extractor = extractor_llm.with_structured_output(TickerExtraction)

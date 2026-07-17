@@ -9,9 +9,15 @@ import os
 class TickerExtraction(BaseModel):
     ticker: str = Field(description="The exact 1 to 5 letter stock ticker symbol (e.g., AAPL, TSLA, MSFT). If none is found, return 'UNKNOWN'.")
 
+from langchain_core.messages import HumanMessage
+
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
-    latest_message = state["messages"][-1].content if state["messages"] else ""
-    
+    latest_message = ""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            latest_message = msg.content
+            break
+
     # --- The LLM Extractor Upgrade ---
     extractor_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
     structured_extractor = extractor_llm.with_structured_output(TickerExtraction)
@@ -39,6 +45,10 @@ async def quant_agent_node(state: FinancialSwarmState) -> dict:
                 result = await session.call_tool("get_daily_close_price", arguments={"ticker": ticker})
                 
                 text_content = result.content[0].text if isinstance(result.content, list) else result.content
-                return {"quant_data": {ticker: text_content}}
+                # UPDATE: Pass current_ticker out to the state graph
+                return {
+                    "quant_data": {ticker: text_content},
+                    "current_ticker": ticker
+                }
     except Exception as e:
         return {"errors": [f"Quant Server Error: {str(e)}"]}

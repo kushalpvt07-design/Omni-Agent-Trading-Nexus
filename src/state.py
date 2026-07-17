@@ -14,6 +14,8 @@ class FinancialSwarmState(TypedDict):
     # merge_dicts ensures parallel updates don't overwrite each other
     quant_data: Annotated[Dict[str, Any], merge_dicts]
     sentiment_data: Annotated[Dict[str, Any], merge_dicts]
+    # THE FIX: Track the active token across the swarm nodes
+    current_ticker: str 
     
     proposed_trade: Dict[str, Any]
     risk_approved: bool

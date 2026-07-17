@@ -65,7 +65,9 @@ if st.button("🚀 Deploy Swarm", type="primary"):
                     initial_state = {
                         "messages": [HumanMessage(content=user_prompt)],
                         "paper_trading_enabled": paper_trading_mode, # Pass the toggle state!
-                        "quant_data": {}, "sentiment_data": {}, "proposed_trade": {},
+                        "quant_data": {}, "sentiment_data": {}, 
+                        "current_ticker": "", # Initialize field
+                        "proposed_trade": {},
                         "risk_approved": False, "errors": []
                     }
                     

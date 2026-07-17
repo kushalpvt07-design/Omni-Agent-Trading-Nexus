@@ -16,9 +16,16 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     The True Brain. Passes the raw data to the Gemini LLM to reason over and 
     make a structured financial decision.
     """
-    user_request = state["messages"][0].content if state["messages"] else "No request."
-    quant_data = state.get("quant_data", {})
-    sentiment_data = state.get("sentiment_data", {})
+    user_request = "No request."
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            user_request = msg.content
+            break
+    # THE FIX: Isolate data exclusively for the active ticker
+    active_ticker = state.get("current_ticker", "UNKNOWN")
+    
+    raw_quant = state.get("quant_data", {}).get(active_ticker, "No data available.")
+    raw_sentiment = state.get("sentiment_data", {}).get(active_ticker, "No data available.")
 
     # 2. Initialize the Gemini Model with a robust fallback list
     models_to_try = [
@@ -45,14 +52,14 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment. "
         "Your job is to synthesize this data and make a final trading decision. "
-        "If the user asks you to buy on bullish sentiment, and the sentiment is indeed bullish, execute the trade. "
-        "If data is missing or conflicting, default to HOLD."
+        "If the data indicates bullish patterns or confirmations matching the user request, authorize the trade."
     )
     
     analysis_context = (
         f"User Request: {user_request}\n\n"
-        f"Quantitative Data from Quant Agent: {quant_data}\n\n"
-        f"Qualitative Data from Sentiment Agent: {sentiment_data}"
+        f"Target Ticker: {active_ticker}\n\n"
+        f"Quantitative Data: {raw_quant}\n\n"
+        f"Qualitative Data: {raw_sentiment}"
     )
 
     print("\nGemini Orchestrator is analyzing the swarm data...")
