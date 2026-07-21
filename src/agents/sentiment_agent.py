@@ -11,31 +11,12 @@ class TickerExtraction(BaseModel):
 from langchain_core.messages import HumanMessage
 
 async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
-    latest_message = ""
-    for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, HumanMessage):
-            latest_message = msg.content
-            break
-
-    # --- The LLM Extractor Upgrade ---
-    extractor_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-    structured_extractor = extractor_llm.with_structured_output(TickerExtraction)
-    
-    try:
-        extraction = await structured_extractor.ainvoke(
-            f"You are a strict financial entity extractor. Extract the OFFICIAL stock market ticker symbol from this message. "
-            f"CRITICAL: You must convert company names to their actual market tickers (e.g., 'tesla' MUST become 'TSLA', 'apple' MUST become 'AAPL'). "
-            f"Message: '{latest_message}'"
-        )
-        ticker = extraction.ticker.upper()
-    except Exception as e:
-        return {"errors": [f"Sentiment Agent Extraction Failed: {str(e)}"]}
-    
+    ticker = state.get("current_ticker", "")
     if ticker == "UNKNOWN" or not ticker:
         return {} # Let the Quant agent throw the missing ticker error to the UI
 
-    # --- The Original MCP Server Call ---
-    server_params = StdioServerParameters(command="python", args=["-m", "src.servers.sentiment_server"])
+    import sys
+    server_params = StdioServerParameters(command=sys.executable, args=["-m", "src.servers.sentiment_server"])
 
     try:
         async with stdio_client(server_params) as (read_stream, write_stream):

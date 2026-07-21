@@ -12,31 +12,12 @@ class TickerExtraction(BaseModel):
 from langchain_core.messages import HumanMessage
 
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
-    latest_message = ""
-    for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, HumanMessage):
-            latest_message = msg.content
-            break
-
-    # --- The LLM Extractor Upgrade ---
-    extractor_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-    structured_extractor = extractor_llm.with_structured_output(TickerExtraction)
-    
-    try:
-        extraction = await structured_extractor.ainvoke(
-            f"You are a strict financial entity extractor. Extract the OFFICIAL stock market ticker symbol from this message. "
-            f"CRITICAL: You must convert company names to their actual market tickers (e.g., 'tesla' MUST become 'TSLA', 'apple' MUST become 'AAPL'). "
-            f"Message: '{latest_message}'"
-        )
-        ticker = extraction.ticker.upper()
-    except Exception as e:
-        return {"errors": [f"Quant Agent Extraction Failed: {str(e)}"]}
-    
+    ticker = state.get("current_ticker", "")
     if ticker == "UNKNOWN" or not ticker:
-        return {"errors": ["Quant Agent: Could not resolve a valid ticker symbol from the prompt."]}
+        return {"errors": ["Quant Agent: Could not resolve a valid ticker symbol from the state."]}
 
-    # --- The Original MCP Server Call ---
-    server_params = StdioServerParameters(command="python", args=["-m", "src.servers.quant_server"])
+    import sys
+    server_params = StdioServerParameters(command=sys.executable, args=["-m", "src.servers.quant_server"])
 
     try:
         async with stdio_client(server_params) as (read_stream, write_stream):

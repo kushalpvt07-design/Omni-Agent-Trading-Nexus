@@ -75,7 +75,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
             "ticker": decision.ticker,
             "action": decision.action,
             "shares": decision.shares,
-            "estimated_price": 0.0 
+            "estimated_price": 0.0,
+            "reasoning": decision.reasoning
         }
         
         final_report = (
