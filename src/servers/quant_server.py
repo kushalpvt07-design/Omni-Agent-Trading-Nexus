@@ -21,12 +21,15 @@ def get_daily_close_price(ticker: str) -> str:
     try:
         # Fetch live data from Yahoo Finance
         stock = yf.Ticker(ticker_upper)
-        hist = stock.history(period="5d")
+        hist = stock.history(period="1mo")
         
         if hist.empty:
             return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}. It might be delisted or invalid."})
 
-        # Format the 5-day trend
+        # Calculate 30-day volatility (Standard Deviation of Close)
+        std_dev = float(hist['Close'].std())
+
+        # Format the 30-day trend
         history_data = []
         for date, row in hist.iterrows():
             history_data.append({
@@ -44,7 +47,10 @@ def get_daily_close_price(ticker: str) -> str:
             "ticker": ticker_upper,
             "latest_close": latest["close"],
             "latest_volume": latest["volume"],
-            "five_day_trend": history_data
+            "volatility_metrics": {
+                "30_day_standard_deviation": round(std_dev, 2)
+            },
+            "thirty_day_trend": history_data
         }
         
         return json.dumps(payload, indent=2)

@@ -46,7 +46,7 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             f"CRITICAL: You must convert company names to their actual market tickers (e.g., 'tesla' MUST become 'TSLA', 'apple' MUST become 'AAPL'). "
             f"Message: '{latest_message}'"
         )
-        ticker = extraction.ticker.upper()
+        ticker = extraction.ticker.strip(" \n\"'").upper()
     except Exception as e:
         return {"errors": [f"Parser Agent Extraction Failed: {str(e)}"]}
     
