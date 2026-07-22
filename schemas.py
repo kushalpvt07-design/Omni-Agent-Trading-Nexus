@@ -12,3 +12,4 @@ class TradeResponse(BaseModel):
     shares: Optional[int] = 0
     risk_approved: bool = False
     orchestrator_reasoning: Optional[str] = None
+    error_message: Optional[str] = None

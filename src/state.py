@@ -16,6 +16,7 @@ class FinancialSwarmState(TypedDict):
     sentiment_data: Annotated[Dict[str, Any], merge_dicts]
     # THE FIX: Track the active token across the swarm nodes
     current_ticker: str 
+    asset_class: str
     
     proposed_trade: Dict[str, Any]
     risk_approved: bool

@@ -15,6 +15,13 @@ def get_available_cash():
     except Exception:
         return 0.0 # If the file is locked or corrupted, assume zero cash to freeze trading
 
+async def pre_flight_risk_node(state: FinancialSwarmState) -> dict:
+    """Short-circuits the pipeline if portfolio cash is insufficient."""
+    cash_available = get_available_cash()
+    if cash_available < 100.0:
+        return {"errors": ["PRE_FLIGHT_REJECTION: Insufficient funds in ledger to execute any trade. Aborting pipeline."]}
+    return {}
+
 async def risk_agent_node(state: FinancialSwarmState) -> dict:
     """
     The Risk Desk. Intercepts the Orchestrator's proposal and runs compliance checks.
@@ -32,28 +39,47 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
             "messages": [AIMessage(content="🛡️ Risk Desk: No active trade proposed. Cleared.")]
         }
 
-    # For testing, we keep the mock price. In production, this pulls from Quant memory.
-    mock_price = 150.0 
-    trade_value = mock_price * shares
+    # Pull live price and metrics from Quant memory.
+    quant_data = state.get("quant_data", {}).get(ticker, "")
+    live_price = 150.0
+    std_dev = 0.0
+    if quant_data:
+        try:
+            parsed_quant = json.loads(quant_data)
+            if "latest_close" in parsed_quant:
+                live_price = float(parsed_quant["latest_close"])
+            metrics = parsed_quant.get("volatility_metrics", {})
+            if "30_day_standard_deviation" in metrics:
+                std_dev = float(metrics["30_day_standard_deviation"])
+        except Exception:
+            pass
+            
+    trade_value = live_price * shares
     cash_available = get_available_cash()
 
-    # THE RULE: Max 20% cash allocation per trade
-    max_allowed_spend = cash_available * 0.20
+    # Dynamic Position Sizing based on volatility
+    volatility_pct = (std_dev / live_price) if live_price > 0 else 0
+    # Base allocation 30%, reduce aggressively for high volatility, minimum 5%
+    allocation_pct = max(0.05, 0.30 - (volatility_pct * 2.0))
+    max_allowed_spend = cash_available * allocation_pct
 
-    print(f"\n[Risk Desk] analyzing {action} order for {shares} shares of {ticker}...")
+    print(f"\n[Risk Desk] analyzing {action} order for {shares} shares of {ticker} at ${live_price:,.2f} (Vol: {volatility_pct:.1%} -> Max Allocation: {allocation_pct:.1%})...")
 
     if action == "BUY" and trade_value > max_allowed_spend:
         reject_msg = (
-            f"⛔ RISK DESK REJECTION: Trade value (${trade_value:,.2f}) exceeds the 20% "
-            f"maximum cash allocation limit (${max_allowed_spend:,.2f}). Overriding to HOLD."
+            f"⛔ RISK DESK REJECTION: Trade value (${trade_value:,.2f}) exceeds the dynamically adjusted "
+            f"{allocation_pct:.1%} maximum cash allocation limit (${max_allowed_spend:,.2f}). Overriding to HOLD."
         )
+        
+        original_reasoning = trade.get("reasoning", "No original reasoning provided.")
         
         # Forcefully overwrite the Orchestrator's trade with a dead HOLD order
         overridden_trade = {
             "ticker": ticker,
             "action": "HOLD",
             "shares": 0,
-            "estimated_price": 0.0
+            "estimated_price": live_price,
+            "reasoning": f"[RISK REJECTION: Exceeds dynamically adjusted cash limit] Original LLM Analysis: {original_reasoning}"
         }
         
         return {

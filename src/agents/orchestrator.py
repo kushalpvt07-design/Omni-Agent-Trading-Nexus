@@ -1,8 +1,9 @@
 import os
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI # NEW IMPORT
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from src.state import FinancialSwarmState
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 # 1. The Strict Schema remains exactly the same
 class TradeDecision(BaseModel):
@@ -10,6 +11,17 @@ class TradeDecision(BaseModel):
     ticker: str = Field(description="The exact stock ticker symbol, e.g., 'AAPL'")
     shares: int = Field(description="Number of shares to trade (0 if HOLD)")
     reasoning: str = Field(description="A short, 2-sentence explanation of why this action was chosen based on the data.")
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type(Exception)
+)
+async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context):
+    return await structured_llm.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=analysis_context)
+    ])
 
 async def orchestrator_node(state: FinancialSwarmState) -> dict:
     """
@@ -21,9 +33,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         if isinstance(msg, HumanMessage):
             user_request = msg.content
             break
-    # THE FIX: Isolate data exclusively for the active ticker
+            
     active_ticker = state.get("current_ticker", "UNKNOWN")
-    
     raw_quant = state.get("quant_data", {}).get(active_ticker, "No data available.")
     raw_sentiment = state.get("sentiment_data", {}).get(active_ticker, "No data available.")
 
@@ -52,7 +63,7 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment. "
         "Your job is to synthesize this data and make a final trading decision. "
-        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or no data is found, you MUST reject the trade. Set the action to 'HOLD', shares to 0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
+        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or DATA_CORRUPT, you MUST reject the trade. Set the action to 'HOLD', shares to 0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
         "If the data is valid and indicates bullish patterns or confirmations matching the user request, authorize the trade."
     )
     
@@ -66,11 +77,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     print("\nGemini Orchestrator is analyzing the swarm data...")
 
     try:
-        # 3. Invoke the Gemini LLM
-        decision: TradeDecision = await structured_llm.ainvoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=analysis_context)
-        ])
+        # 3. Invoke the Gemini LLM with exponential backoff
+        decision: TradeDecision = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
         proposed_trade = {
             "ticker": decision.ticker,
@@ -92,4 +100,4 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         }
         
     except Exception as e:
-        return {"errors": [f"Orchestrator LLM Failed: {str(e)}"]}
+        return {"errors": ["STATUS: ERROR - LLM Timeout/Rate Limit Exceeded. Validation failed after retries."]}

@@ -11,9 +11,12 @@ class TickerExtraction(BaseModel):
 from langchain_core.messages import HumanMessage
 
 async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
+    if state.get("errors"):
+        return {}
+
     ticker = state.get("current_ticker", "")
     if ticker == "UNKNOWN" or not ticker:
-        return {} # Let the Quant agent throw the missing ticker error to the UI
+        return {"errors": ["Sentiment Agent: Could not resolve a valid ticker symbol from the state."]}
 
     import sys
     server_params = StdioServerParameters(command=sys.executable, args=["-m", "src.servers.sentiment_server"])

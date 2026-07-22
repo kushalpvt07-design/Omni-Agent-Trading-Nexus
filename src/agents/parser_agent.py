@@ -4,7 +4,8 @@ from src.state import FinancialSwarmState
 from langchain_core.messages import HumanMessage
 
 class TickerExtraction(BaseModel):
-    ticker: str = Field(description="The exact 1 to 5 letter stock ticker symbol (e.g., AAPL, TSLA, MSFT). If none is found, return 'UNKNOWN'.")
+    ticker: str = Field(description="The exact stock ticker symbol or crypto pair (e.g., AAPL, BTC/USD). If none is found, return 'UNKNOWN'.")
+    asset_class: str = Field(description="Must be 'crypto' or 'equity'")
 
 import re
 
@@ -20,8 +21,13 @@ async def parser_node(state: FinancialSwarmState) -> dict:
     # Exclude common English false positives
     tickers = [t for t in tickers if t not in {"BUY", "SELL", "A", "I", "FOR", "THE", "OF", "TO", "IN"}]
     
+    crypto_assets = {"BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "LINK"}
+    
     if tickers:
-        return {"current_ticker": tickers[0]}
+        ticker = tickers[0]
+        if ticker in crypto_assets:
+            return {"current_ticker": f"{ticker}/USD", "asset_class": "crypto"}
+        return {"current_ticker": ticker, "asset_class": "equity"}
 
     # 2. Fallback to LLM only if Regex fails (or input is natural language company name)
     models_to_try = [
@@ -42,15 +48,17 @@ async def parser_node(state: FinancialSwarmState) -> dict:
     
     try:
         extraction = await structured_extractor.ainvoke(
-            f"You are a strict financial entity extractor. Extract the OFFICIAL stock market ticker symbol from this message. "
-            f"CRITICAL: You must convert company names to their actual market tickers (e.g., 'tesla' MUST become 'TSLA', 'apple' MUST become 'AAPL'). "
+            f"You are a strict financial entity extractor. Extract the OFFICIAL stock market ticker symbol or crypto pair from this message. "
+            f"CRITICAL: You must convert company names to their actual market tickers (e.g., 'tesla' MUST become 'TSLA'). "
+            f"For cryptocurrencies, use the Alpaca format with a slash (e.g., 'bitcoin' MUST become 'BTC/USD'). "
             f"Message: '{latest_message}'"
         )
         ticker = extraction.ticker.strip(" \n\"'").upper()
+        asset_class = extraction.asset_class.strip().lower()
     except Exception as e:
         return {"errors": [f"Parser Agent Extraction Failed: {str(e)}"]}
     
     if ticker == "UNKNOWN" or not ticker:
         return {"errors": ["Parser Agent: Could not resolve a valid ticker symbol from the prompt."]}
 
-    return {"current_ticker": ticker}
+    return {"current_ticker": ticker, "asset_class": asset_class}

@@ -37,7 +37,10 @@ async def analyze_trade(request: TradeRequest):
         # 3. Extract the critical data from the Swarm's final state
         if final_state.get("errors"):
             error_details = " | ".join(final_state["errors"])
-            raise HTTPException(status_code=400, detail=f"Swarm encountered errors: {error_details}")
+            return TradeResponse(
+                status="ERROR",
+                error_message=error_details
+            )
             
         proposed_trade = final_state.get("proposed_trade", {})
         

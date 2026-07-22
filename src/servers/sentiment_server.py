@@ -9,8 +9,12 @@ def analyze_market_sentiment(ticker: str) -> str:
     """Fetches real market news using yfinance for sentiment analysis."""
     ticker_upper = ''.join(e for e in ticker.upper() if e.isalnum())
     
+    # Map cryptocurrencies to Yahoo Finance's format
+    crypto_assets = {"BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "LINK"}
+    yf_ticker = f"{ticker_upper}-USD" if ticker_upper in crypto_assets else ticker_upper
+    
     try:
-        stock = yf.Ticker(ticker_upper)
+        stock = yf.Ticker(yf_ticker)
         news = stock.news
         
         headlines = []

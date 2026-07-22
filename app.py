@@ -24,8 +24,11 @@ if st.button("Deploy Swarm"):
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # Display the results
-                    st.success("Swarm Consensus Reached")
+                    if data.get("status") == "ERROR":
+                        st.error(f"🚨 CRITICAL SYSTEM FAILURE: {data.get('error_message')}")
+                    else:
+                        # Display the results
+                        st.success("Swarm Consensus Reached")
                     
                     col1, col2, col3 = st.columns(3)
                     col1.metric("Target Asset", data["ticker"])
