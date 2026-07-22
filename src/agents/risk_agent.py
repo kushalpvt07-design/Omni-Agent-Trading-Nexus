@@ -29,11 +29,11 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
     """
     trade = state.get("proposed_trade", {})
     action = trade.get("action", "HOLD")
-    shares = trade.get("shares", 0)
+    allocation = trade.get("allocation", 0.0)
     ticker = trade.get("ticker", "UNKNOWN")
 
     # Pass-through if no action is required
-    if action == "HOLD" or shares <= 0:
+    if action == "HOLD" or allocation <= 0:
         return {
             "risk_approved": True, 
             "messages": [AIMessage(content="🛡️ Risk Desk: No active trade proposed. Cleared.")]
@@ -54,8 +54,8 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
         except Exception:
             pass
             
-    trade_value = live_price * shares
     cash_available = get_available_cash()
+    requested_trade_value = cash_available * allocation
 
     # Dynamic Position Sizing based on volatility
     volatility_pct = (std_dev / live_price) if live_price > 0 else 0
@@ -63,12 +63,12 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
     allocation_pct = max(0.05, 0.30 - (volatility_pct * 2.0))
     max_allowed_spend = cash_available * allocation_pct
 
-    print(f"\n[Risk Desk] analyzing {action} order for {shares} shares of {ticker} at ${live_price:,.2f} (Vol: {volatility_pct:.1%} -> Max Allocation: {allocation_pct:.1%})...")
+    print(f"\n[Risk Desk] analyzing {action} order for {allocation*100:.1f}% allocation of {ticker} (Requested: ${requested_trade_value:,.2f} | Max allowed: ${max_allowed_spend:,.2f})...")
 
-    if action == "BUY" and trade_value > max_allowed_spend:
+    if action == "BUY" and allocation > allocation_pct:
         reject_msg = (
-            f"⛔ RISK DESK REJECTION: Trade value (${trade_value:,.2f}) exceeds the dynamically adjusted "
-            f"{allocation_pct:.1%} maximum cash allocation limit (${max_allowed_spend:,.2f}). Overriding to HOLD."
+            f"⛔ RISK DESK REJECTION: Requested allocation ({allocation*100:.1f}%) exceeds the dynamically adjusted "
+            f"maximum limit ({allocation_pct*100:.1f}%). Overriding to HOLD."
         )
         
         original_reasoning = trade.get("reasoning", "No original reasoning provided.")
@@ -77,6 +77,7 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
         overridden_trade = {
             "ticker": ticker,
             "action": "HOLD",
+            "allocation": 0.0,
             "shares": 0,
             "estimated_price": live_price,
             "reasoning": f"[RISK REJECTION: Exceeds dynamically adjusted cash limit] Original LLM Analysis: {original_reasoning}"
@@ -88,9 +89,14 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
             "messages": [AIMessage(content=reject_msg)]
         }
 
-    approve_msg = f"✅ RISK DESK APPROVAL: Trade value (${trade_value:,.2f}) is within compliance limits. Routing to Human Checkpoint."
+    approve_msg = f"✅ RISK DESK APPROVAL: Allocation ({allocation*100:.1f}%) is within compliance limits. Routing to Human Checkpoint."
+
+    # Update trade with live price so execution agent doesn't have to pull it again
+    updated_trade = trade.copy()
+    updated_trade["estimated_price"] = live_price
 
     return {
         "risk_approved": True, 
+        "proposed_trade": updated_trade,
         "messages": [AIMessage(content=approve_msg)]
     }

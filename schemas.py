@@ -9,7 +9,7 @@ class TradeResponse(BaseModel):
     status: str
     ticker: Optional[str] = None
     action: Optional[str] = None
-    shares: Optional[int] = 0
+    shares: Optional[float] = 0.0
     risk_approved: bool = False
     orchestrator_reasoning: Optional[str] = None
     error_message: Optional[str] = None

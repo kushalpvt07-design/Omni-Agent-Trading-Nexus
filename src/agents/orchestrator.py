@@ -10,7 +10,7 @@ import google.api_core.exceptions
 class TradeDecision(BaseModel):
     action: str = Field(description="Must be exactly 'BUY', 'SELL', or 'HOLD'")
     ticker: str = Field(description="The exact stock ticker symbol, e.g., 'AAPL'")
-    shares: int = Field(description="Number of shares to trade (0 if HOLD)")
+    allocation: float = Field(description="Target percentage of the portfolio to allocate (e.g., 0.15 for 15%). 0.0 if HOLD.")
     reasoning: str = Field(description="A short, 2-sentence explanation of why this action was chosen based on the data.")
 
 @retry(
@@ -64,7 +64,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment. "
         "Your job is to synthesize this data and make a final trading decision. "
-        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or DATA_CORRUPT, you MUST reject the trade. Set the action to 'HOLD', shares to 0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
+        "Do not calculate shares. Only output the target portfolio allocation percentage as a float between 0.0 and 1.0. "
+        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or DATA_CORRUPT, you MUST reject the trade. Set the action to 'HOLD', allocation to 0.0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
         "If the data is valid and indicates bullish patterns or confirmations matching the user request, authorize the trade."
     )
     
@@ -84,14 +85,15 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         proposed_trade = {
             "ticker": decision.ticker,
             "action": decision.action,
-            "shares": decision.shares,
+            "allocation": decision.allocation,
+            "shares": 0,
             "estimated_price": 0.0,
             "reasoning": decision.reasoning
         }
         
         final_report = (
             f"**AI Swarm Analysis Complete for {decision.ticker}**\n\n"
-            f"**Action:** {decision.action} {decision.shares} Shares\n"
+            f"**Action:** {decision.action} {decision.allocation*100:.1f}% Allocation\n"
             f"**Reasoning:** {decision.reasoning}"
         )
         
