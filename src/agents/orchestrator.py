@@ -3,7 +3,8 @@ from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from src.state import FinancialSwarmState
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
+import google.api_core.exceptions
 
 # 1. The Strict Schema remains exactly the same
 class TradeDecision(BaseModel):
@@ -13,9 +14,9 @@ class TradeDecision(BaseModel):
     reasoning: str = Field(description="A short, 2-sentence explanation of why this action was chosen based on the data.")
 
 @retry(
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(3),
-    retry=retry_if_exception_type(Exception)
+    retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
+    wait=wait_exponential_jitter(initial=1, max=60, exp_base=2, jitter=1),
+    stop=stop_after_attempt(5)
 )
 async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context):
     return await structured_llm.ainvoke([
