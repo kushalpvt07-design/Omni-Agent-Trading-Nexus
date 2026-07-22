@@ -14,16 +14,20 @@ from src.agents.orchestrator import orchestrator_node
 from src.agents.risk_agent import risk_agent_node # NEW: Import the Risk Desk
 from src.agents.execution_agent import execution_agent_node
 
+from src.agents.parser_agent import parser_node
+
 workflow = StateGraph(FinancialSwarmState)
 
+workflow.add_node("parser_agent", parser_node)
 workflow.add_node("quant_agent", quant_agent_node)
 workflow.add_node("sentiment_agent", sentiment_agent_node)
 workflow.add_node("orchestrator", orchestrator_node)
 workflow.add_node("risk_agent", risk_agent_node) # NEW: Register the node
 workflow.add_node("execution_agent", execution_agent_node)
 
-workflow.add_edge(START, "quant_agent")
-workflow.add_edge(START, "sentiment_agent")
+workflow.add_edge(START, "parser_agent")
+workflow.add_edge("parser_agent", "quant_agent")
+workflow.add_edge("parser_agent", "sentiment_agent")
 workflow.add_edge("quant_agent", "orchestrator")
 workflow.add_edge("sentiment_agent", "orchestrator")
 

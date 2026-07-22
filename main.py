@@ -33,21 +33,28 @@ async def analyze_trade(request: TradeRequest):
         
         # 2. Asynchronously invoke the Swarm
         final_state = await trading_swarm.ainvoke(initial_state)
-        import pprint
-        pprint.pprint(final_state)
         
         # 3. Extract the critical data from the Swarm's final state
+        if final_state.get("errors"):
+            error_details = " | ".join(final_state["errors"])
+            raise HTTPException(status_code=400, detail=f"Swarm encountered errors: {error_details}")
+            
         proposed_trade = final_state.get("proposed_trade", {})
+        
+        # Safely extract the ticker, falling back to current_ticker, or UNKNOWN
+        ticker = proposed_trade.get("ticker") or final_state.get("current_ticker") or "UNKNOWN"
         
         return TradeResponse(
             status="success",
-            ticker=proposed_trade.get("ticker"),
+            ticker=ticker,
             action=proposed_trade.get("action", "HOLD"),
             shares=proposed_trade.get("shares", 0),
             risk_approved=final_state.get("risk_approved", False),
             orchestrator_reasoning=proposed_trade.get("reasoning", "No reasoning provided.")
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         # Don't just fail silently like a junior dev. Catch and raise proper HTTP errors.
         raise HTTPException(status_code=500, detail=f"Swarm execution failed: {str(e)}")

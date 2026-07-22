@@ -1,6 +1,8 @@
 {
-    "cash": 98500.0,
+    "cash": 65500.0,
     "positions": {
-        "MSFT": 10
+        "MSFT": 10,
+        "NVDA": 20,
+        "TSLA": 200
     }
 }

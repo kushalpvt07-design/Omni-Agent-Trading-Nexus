@@ -52,7 +52,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment. "
         "Your job is to synthesize this data and make a final trading decision. "
-        "If the data indicates bullish patterns or confirmations matching the user request, authorize the trade."
+        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or no data is found, you MUST reject the trade. Set the action to 'HOLD', shares to 0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
+        "If the data is valid and indicates bullish patterns or confirmations matching the user request, authorize the trade."
     )
     
     analysis_context = (

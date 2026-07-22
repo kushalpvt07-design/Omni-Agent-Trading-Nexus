@@ -40,7 +40,7 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
     # THE RULE: Max 20% cash allocation per trade
     max_allowed_spend = cash_available * 0.20
 
-    print(f"\n🛡️ Risk Desk analyzing {action} order for {shares} shares of {ticker}...")
+    print(f"\n[Risk Desk] analyzing {action} order for {shares} shares of {ticker}...")
 
     if action == "BUY" and trade_value > max_allowed_spend:
         reject_msg = (
