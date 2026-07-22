@@ -29,13 +29,13 @@ if st.button("Deploy Swarm"):
                     else:
                         # Display the results
                         st.success("Swarm Consensus Reached")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Target Asset", data["ticker"])
-                    col2.metric("Swarm Signal", data["action"])
-                    col3.metric("Order Size", f"{data['shares']} Shares")
-                    
-                    st.info(f"**Orchestrator Reasoning:** {data['orchestrator_reasoning']}")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Target Asset", data["ticker"])
+                        col2.metric("Swarm Signal", data["action"])
+                        col3.metric("Order Size", f"{data['shares']} Shares")
+                        
+                        st.info(f"**Orchestrator Reasoning:** {data['orchestrator_reasoning']}")
                 else:
                     st.error(f"Backend Server Error: {response.text}")
                     
