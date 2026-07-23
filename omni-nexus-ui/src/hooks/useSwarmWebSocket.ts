@@ -5,6 +5,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 // Define the strict schemas your parser is supposed to be sending
 export interface SwarmState {
   isConnected: boolean;
+  isDeploying: boolean;
+  activeAgent: 'idle' | 'parser' | 'sentiment' | 'quant' | 'orchestrator' | 'risk' | 'action_center';
+  chartData: any[];
   directiveLogs: string[];
   newsIntel: { headline: string; quantImpact: 'High' | 'Med' | 'Low'; score: number; }[];
   pipelineStatus: {
@@ -25,6 +28,9 @@ export interface SwarmState {
 export function useSwarmWebSocket(url: string) {
   const [state, setState] = useState<SwarmState>({
     isConnected: false,
+    isDeploying: false,
+    activeAgent: 'idle',
+    chartData: [],
     directiveLogs: [],
     newsIntel: [],
     pipelineStatus: {
@@ -65,18 +71,46 @@ export function useSwarmWebSocket(url: string) {
         }
 
         // Handle Human-in-the-loop checkpoint
-        if (payload.type === 'human_checkpoint') {
+        if (payload.type === 'checkpoint') {
           setState(prev => ({
             ...prev,
-            pendingAction: payload.trade_details
+            isDeploying: false,
+            activeAgent: 'action_center',
+            pendingAction: payload.trade_details || { ticker: 'PENDING', action: 'REVIEW', allocation: 0, shares: 0 }
+          }));
+        }
+
+        // Handle Chart Data
+        if (payload.type === 'chart_data') {
+          setState(prev => ({
+            ...prev,
+            chartData: payload.data || []
           }));
         }
 
         // Handle raw system logs
-        if (payload.type === 'log') {
+        if (payload.type === 'message') {
+          const roleMap: Record<string, keyof SwarmState['pipelineStatus']> = {
+            'Parser': 'parser',
+            'Sentiment': 'sentiment',
+            'Quant': 'quant',
+            'Orchestrator': 'orchestrator',
+            'Risk': 'risk'
+          };
+          const node = roleMap[payload.role];
+          
+          let nextAgent: SwarmState['activeAgent'] = prev.activeAgent;
+          if (payload.role === 'Parser') nextAgent = 'sentiment';
+          else if (payload.role === 'Sentiment') nextAgent = 'quant';
+          else if (payload.role === 'Quant') nextAgent = 'orchestrator';
+          else if (payload.role === 'Orchestrator') nextAgent = 'risk';
+          else if (payload.role === 'Risk') nextAgent = 'action_center';
+
           setState(prev => ({
             ...prev,
-            directiveLogs: [...prev.directiveLogs, payload.message]
+            activeAgent: nextAgent,
+            directiveLogs: [...prev.directiveLogs, `[${payload.role}] ${payload.content}`],
+            pipelineStatus: node ? { ...prev.pipelineStatus, [node]: 'complete' as const } : prev.pipelineStatus
           }));
         }
       } catch (error) {
@@ -96,8 +130,19 @@ export function useSwarmWebSocket(url: string) {
 
   // Command execution handlers
   const deployDirective = useCallback((directive: string) => {
+    if (!directive.trim()) return;
+
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'start_swarm', payload: directive }));
+      // Optimistic state updates
+      setState(prev => ({
+        ...prev,
+        isDeploying: true,
+        activeAgent: 'parser',
+        directiveLogs: [...prev.directiveLogs, `[User] ${directive}`],
+        chartData: [] // reset chart data
+      }));
+      
+      wsRef.current.send(JSON.stringify({ directive: directive, paper_trading: true }));
     } else {
       console.error("Cannot deploy: Nexus is offline.");
     }
@@ -106,8 +151,8 @@ export function useSwarmWebSocket(url: string) {
   const resolveCheckpoint = useCallback((approved: boolean) => {
     if (wsRef.current?.readyState === WebSocket.OPEN && state.pendingAction) {
       wsRef.current.send(JSON.stringify({ 
-        action: 'resolve_checkpoint', 
-        decision: approved ? 'APPROVE' : 'REJECT' 
+        type: 'human_approval', 
+        approved: approved 
       }));
       // Clear the action center once resolved
       setState(prev => ({ ...prev, pendingAction: null }));

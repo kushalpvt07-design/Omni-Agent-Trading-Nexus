@@ -1,8 +1,8 @@
 "use client"; // CRITICAL: This MUST be a client component for WebSockets
 
 import React, { useState } from 'react';
-import { useSwarmWebSocket } from '@/hooks/useSwarmWebSocket'; // Assuming you saved my hook logic here
-
+import { useSwarmWebSocket } from '@/hooks/useSwarmWebSocket';
+import { AreaChart } from '@tremor/react';
 
 
 export default function OmniAgentNexus() {
@@ -61,12 +61,17 @@ export default function OmniAgentNexus() {
               type="text" 
               value={inputDirective} 
               onChange={(e) => setInputDirective(e.target.value)}
-              className="flex-1 bg-slate-950 border border-slate-800 rounded px-4 py-3 font-mono text-sm text-slate-200"
+              disabled={state.isDeploying}
+              className="flex-1 bg-slate-950 border border-slate-800 rounded px-4 py-3 font-mono text-sm text-slate-200 disabled:opacity-50"
             />
             <button 
-              onClick={() => deployDirective(inputDirective)}
-              className="bg-teal-800 hover:bg-teal-700 text-teal-100 font-semibold px-6 py-3 rounded uppercase tracking-wider transition-colors">
-              Deploy
+              onClick={() => {
+                deployDirective(inputDirective);
+                setInputDirective('');
+              }}
+              disabled={state.isDeploying || !state.isConnected}
+              className="bg-teal-800 hover:bg-teal-700 disabled:bg-slate-800 disabled:text-slate-500 text-teal-100 font-semibold px-6 py-3 rounded uppercase tracking-wider transition-colors">
+              {state.isDeploying ? 'Deploying...' : 'Deploy'}
             </button>
           </div>
         </div>
@@ -96,9 +101,16 @@ export default function OmniAgentNexus() {
           </div>
           {/* CSS FIX: Explicit overflow-hidden on chart container! */}
           <div className="flex-1 bg-slate-950 border border-slate-800 rounded overflow-hidden flex items-center justify-center text-slate-600">
-            {/* THIS IS THE INFAMOUS "LIVE GRAPH GOING TO INFINITY". WE CONTAINED IT. */}
-            {state.isConnected && (state.pipelineStatus.parser === 'complete' || state.pendingAction) ? (
-              <p>[Live Tremor Candlestick Chart Renders Here - Contained]</p>
+            {state.isConnected && state.chartData && state.chartData.length > 0 ? (
+              <AreaChart
+                className="h-full w-full pt-4"
+                data={state.chartData}
+                index="date"
+                categories={["close"]}
+                colors={["teal"]}
+                showYAxis={false}
+                showLegend={false}
+              />
             ) : (
               <p className="italic text-center px-4">Graph inactive. Nexus is on standby.</p>
             )}
@@ -208,10 +220,11 @@ export default function OmniAgentNexus() {
             { label: '🛡 Risk: approved', key: 'risk' }
           ].map((step, i) => {
             const statusInfo = getStepIcon(state.pipelineStatus[step.key as keyof typeof state.pipelineStatus]);
+            const isActive = state.activeAgent === step.key;
             return (
-              <p key={i}>
-                <span className={`${statusInfo.color} mr-2`}>{statusInfo.icon}</span> 
-                {step.label} -&gt;
+              <p key={i} className={`transition-opacity duration-300 ${isActive ? 'opacity-100 animate-pulse text-slate-200' : 'opacity-70'}`}>
+                <span className={`${statusInfo.color} mr-2`}>{isActive ? '⚡' : statusInfo.icon}</span> 
+                {step.label} {isActive ? '...' : '->'}
               </p>
             );
           })}

@@ -145,11 +145,44 @@ async def websocket_endpoint(websocket: WebSocket):
                         messages = node_state.get("messages", [])
                         if messages:
                             content = getattr(messages[-1], "content", str(messages[-1]))
-                            role_name = node_name.replace("_agent_node", "").replace("_node", "").capitalize()
+                            
+                            # Determine role based on which agent just finished
+                            role_map = {
+                                "parser_agent": "Parser",
+                                "sentiment_agent": "Sentiment",
+                                "quant_agent": "Quant",
+                                "orchestrator": "Orchestrator",
+                                "risk_agent": "Risk"
+                            }
+                            role_name = role_map.get(node_name, node_name.capitalize())
+                            
                             await websocket.send_json({
                                 "type": "message",
                                 "role": role_name,
                                 "content": content
+                            })
+                            
+                        # INJECT MOCK OHLC DATA ONCE PARSER IS DONE
+                        if node_name == "parser_agent" and node_state.get("current_ticker"):
+                            import random
+                            ticker = node_state["current_ticker"]
+                            base_price = 150.0 if "USD" not in ticker else 60000.0
+                            chart_data = []
+                            for i in range(30):
+                                open_p = base_price + random.uniform(-3, 3)
+                                close_p = open_p + random.uniform(-2, 2)
+                                chart_data.append({
+                                    "date": f"Day {i+1}",
+                                    "open": open_p,
+                                    "high": max(open_p, close_p) + random.uniform(0, 1),
+                                    "low": min(open_p, close_p) - random.uniform(0, 1),
+                                    "close": close_p
+                                })
+                                base_price = close_p
+                            await websocket.send_json({
+                                "type": "chart_data",
+                                "ticker": ticker,
+                                "data": chart_data
                             })
                         
                         if node_state.get("errors"):
@@ -162,11 +195,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 # CRITICAL: Inspect the graph state to see if it paused at the execution gate
                 current_state = await trading_swarm.aget_state(config)
                 if current_state.next and "execution_agent" in current_state.next:
+                    proposed_trade = current_state.values.get("proposed_trade", {})
                     # Blast this event to Next.js so the React state updates and unhides the Approve/Reject buttons
                     await websocket.send_json({
                         "type": "checkpoint",
                         "role": "System",
-                        "content": "Awaiting human authorization to execute live trade."
+                        "content": "Awaiting human authorization to execute live trade.",
+                        "trade_details": {
+                            "ticker": proposed_trade.get("ticker", "UNKNOWN"),
+                            "action": proposed_trade.get("action", "REVIEW"),
+                            "allocation": float(proposed_trade.get("allocation", 0)) * 100,
+                            "shares": float(proposed_trade.get("shares", 0))
+                        }
                     })
                 else:
                     await websocket.send_json({

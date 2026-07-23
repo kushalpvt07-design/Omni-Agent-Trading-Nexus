@@ -18,6 +18,12 @@ class FinancialSwarmState(TypedDict):
     current_ticker: str 
     asset_class: str
     
+    # User's exact request extracted by parser
+    requested_action: str
+    requested_quantity: Any # Using Any because it can be float or None
+    requested_allocation: Any # Using Any because it can be float or None
+    risk_threshold: float
+    
     proposed_trade: Dict[str, Any]
     risk_approved: bool
     paper_trading_enabled: bool

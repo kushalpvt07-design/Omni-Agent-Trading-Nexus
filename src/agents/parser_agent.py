@@ -3,12 +3,8 @@ from typing import Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
 from src.state import FinancialSwarmState
 from langchain_core.messages import HumanMessage
+from schemas import TradeDirectiveSchema
 
-class TickerExtraction(BaseModel):
-    is_valid_directive: bool = Field(description="Set to True ONLY if the user provides a specific, unambiguous ticker or company to analyze.")
-    ticker: Optional[str] = Field(default=None, description="The exact stock ticker symbol or crypto pair (e.g., AAPL, BTC/USD).")
-    asset_class: Optional[str] = Field(default=None, description="Must be 'crypto' or 'equity'")
-    rejection_reason: Optional[str] = Field(default=None, description="If is_valid_directive is False, explain why.")
 
 import re
 
@@ -32,18 +28,25 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             return {"current_ticker": f"{ticker}/USD", "asset_class": "crypto"}
         return {"current_ticker": ticker, "asset_class": "equity"}
 
-    # 2. Fallback to LLM only if Regex fails (or input is natural language company name)
     models_to_try = [
+        "gemini-3.5-flash",
         "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
+        "gemini-3-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-tts",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.1-flash-tts",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
-    structured_extractor = primary_llm.with_structured_output(TickerExtraction)
+    structured_extractor = primary_llm.with_structured_output(TradeDirectiveSchema)
     
     fallbacks = [
-        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(TickerExtraction)
+        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(TradeDirectiveSchema)
         for m in models_to_try[1:]
     ]
     structured_extractor = structured_extractor.with_fallbacks(fallbacks)
@@ -70,6 +73,13 @@ async def parser_node(state: FinancialSwarmState) -> dict:
         
         asset_class = getattr(extraction, "asset_class", "equity") or "equity"
         asset_class = asset_class.strip().lower()
+
+        # Capture explicitly requested trade directives
+        action = getattr(extraction, "action", "BUY") or "BUY"
+        quantity = getattr(extraction, "quantity", None)
+        allocation_percentage = getattr(extraction, "allocation_percentage", None)
+        risk_threshold = getattr(extraction, "risk_threshold", 0.5) or 0.5
+
     except Exception as e:
         # Force graph termination by injecting an error
         return {"errors": [f"Parser Extraction Failed: {str(e)}"]}
@@ -78,4 +88,11 @@ async def parser_node(state: FinancialSwarmState) -> dict:
         # Halt the graph instead of passing garbage downstream
         return {"errors": ["Parser Agent: Could not resolve a valid ticker symbol. Halting execution."]}
 
-    return {"current_ticker": ticker, "asset_class": asset_class}
+    return {
+        "current_ticker": ticker, 
+        "asset_class": asset_class,
+        "requested_action": action,
+        "requested_quantity": quantity,
+        "requested_allocation": allocation_percentage,
+        "risk_threshold": risk_threshold
+    }

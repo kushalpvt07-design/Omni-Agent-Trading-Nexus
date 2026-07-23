@@ -38,12 +38,24 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     active_ticker = state.get("current_ticker", "UNKNOWN")
     raw_quant = state.get("quant_data", {}).get(active_ticker, "No data available.")
     raw_sentiment = state.get("sentiment_data", {}).get(active_ticker, "No data available.")
+    
+    requested_action = state.get("requested_action", "BUY")
+    requested_quantity = state.get("requested_quantity")
+    requested_allocation = state.get("requested_allocation")
 
-    # 2. Initialize the Gemini Model with a robust fallback list
+
     models_to_try = [
+        "gemini-3.5-flash",
         "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
+        "gemini-3-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-tts",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.1-flash-tts",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
@@ -78,18 +90,24 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         # 3. Invoke the Gemini LLM with exponential backoff
         decision: TradeDecision = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
+        final_action = requested_action if requested_action else decision.action
+        final_allocation = float(requested_allocation) if requested_allocation is not None else decision.allocation
+        final_shares = float(requested_quantity) if requested_quantity is not None else 0.0
+
         proposed_trade = {
             "ticker": active_ticker, # HARD OVERRIDE: Use state ticker (ETH/USD), not decision.ticker (ETH)
-            "action": decision.action,
-            "allocation": decision.allocation,
-            "shares": 0,
+            "action": final_action,
+            "allocation": 0.0 if final_shares > 0 else final_allocation,
+            "shares": final_shares,
             "estimated_price": 0.0,
             "reasoning": decision.reasoning
         }
         
+        report_qty = f"{final_shares} Shares" if final_shares > 0 else f"{final_allocation*100:.1f}% Allocation"
+        
         final_report = (
             f"**AI Swarm Analysis Complete for {decision.ticker}**\n\n"
-            f"**Action:** {decision.action} {decision.allocation*100:.1f}% Allocation\n"
+            f"**Action:** {final_action} {report_qty}\n"
             f"**Reasoning:** {decision.reasoning}"
         )
         
