@@ -10,13 +10,13 @@ import google.api_core.exceptions
 class TradeDecision(BaseModel):
     action: str = Field(description="Must be exactly 'BUY', 'SELL', or 'HOLD'")
     ticker: str = Field(description="The exact stock ticker symbol, e.g., 'AAPL'")
-    allocation: float = Field(description="Target percentage of the portfolio to allocate (e.g., 0.15 for 15%). 0.0 if HOLD.")
-    reasoning: str = Field(description="A short, 2-sentence explanation of why this action was chosen based on the data.")
+    allocation: float = Field(description="Target percentage as a strict decimal between 0.0 and 1.0 (e.g., 18% is 0.18). NEVER output > 1.0.")
+    reasoning: str = Field(description="A 2-sentence explanation of the market data. DO NOT calculate shares, do not mention portfolio cash, and do not output position sizes. NO MATH.")
 
 @retry(
     retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
-    wait=wait_exponential_jitter(initial=1, max=60, exp_base=2, jitter=1),
-    stop=stop_after_attempt(5)
+    wait=wait_exponential_jitter(initial=1, max=15, exp_base=2, jitter=1), # Cap the wait at 15s, not 60s
+    stop=stop_after_attempt(4) # Kill it faster if the API is truly dead
 )
 async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context):
     return await structured_llm.ainvoke([
@@ -83,7 +83,7 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         decision: TradeDecision = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
         proposed_trade = {
-            "ticker": decision.ticker,
+            "ticker": active_ticker, # HARD OVERRIDE: Use state ticker (ETH/USD), not decision.ticker (ETH)
             "action": decision.action,
             "allocation": decision.allocation,
             "shares": 0,

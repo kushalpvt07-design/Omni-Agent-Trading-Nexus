@@ -16,7 +16,8 @@ def route_after_parser(state: FinancialSwarmState):
 def route_after_pre_flight(state: FinancialSwarmState):
     if state.get("errors"):
         return END
-    return "quant_agent"
+    # Correct parallel routing in LangGraph
+    return ["quant_agent", "sentiment_agent"]
 
 def build_graph():
     workflow = StateGraph(FinancialSwarmState)
@@ -31,20 +32,10 @@ def build_graph():
     workflow.add_edge(START, "parser_node")
     workflow.add_conditional_edges("parser_node", route_after_parser, {END: END, "pre_flight_risk": "pre_flight_risk"})
     
-    # After pre-flight, we branch out in parallel if no errors
-    workflow.add_conditional_edges(
-        "pre_flight_risk", 
-        route_after_pre_flight, 
-        {END: END, "quant_agent": "quant_agent"}
-    )
-    # Langgraph conditional edges to multiple parallel nodes requires custom handling. 
-    # For simplicity, we just add edge to sentiment agent too. If pre_flight errors, quant_agent is skipped, 
-    # but sentiment agent would run? To avoid this, we can make it sequential for now or route both.
-    # Actually, we can just use regular add_edge for sentiment_agent and if errors exist, sentiment_agent just returns early.
-    workflow.add_edge("pre_flight_risk", "sentiment_agent")
+    # Send the output of pre_flight to BOTH parallel nodes or kill the graph
+    workflow.add_conditional_edges("pre_flight_risk", route_after_pre_flight)
     
-    workflow.add_edge("quant_agent", "orchestrator")
-    workflow.add_edge("sentiment_agent", "orchestrator")
+    workflow.add_edge(["quant_agent", "sentiment_agent"], "orchestrator")
     workflow.add_edge("orchestrator", "risk_agent")
     workflow.add_edge("risk_agent", "execution_agent")
     workflow.add_edge("execution_agent", END)

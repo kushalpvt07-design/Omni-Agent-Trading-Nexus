@@ -30,29 +30,29 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
     trade = state.get("proposed_trade", {})
     action = trade.get("action", "HOLD")
     allocation = trade.get("allocation", 0.0)
-    ticker = trade.get("ticker", "UNKNOWN")
+    # CRITICAL: Use the verified state ticker, NOT the LLM's hallucinated ticker
+    ticker = state.get("current_ticker", "UNKNOWN") 
 
-    # Pass-through if no action is required
     if action == "HOLD" or allocation <= 0:
-        return {
-            "risk_approved": True, 
-            "messages": [AIMessage(content="🛡️ Risk Desk: No active trade proposed. Cleared.")]
-        }
+        return {"risk_approved": True, "messages": [AIMessage(content="🛡️ Risk Desk: Cleared.")]}
 
-    # Pull live price and metrics from Quant memory.
     quant_data = state.get("quant_data", {}).get(ticker, "")
-    live_price = 150.0
+    live_price = 0.0 # Do not default to 150.0 like an amateur
     std_dev = 0.0
+    
     if quant_data:
         try:
             parsed_quant = json.loads(quant_data)
-            if "latest_close" in parsed_quant:
-                live_price = float(parsed_quant["latest_close"])
-            metrics = parsed_quant.get("volatility_metrics", {})
-            if "30_day_standard_deviation" in metrics:
-                std_dev = float(metrics["30_day_standard_deviation"])
+            live_price = float(parsed_quant.get("latest_close", 0.0))
+            std_dev = float(parsed_quant.get("volatility_metrics", {}).get("30_day_standard_deviation", 0.0))
         except Exception:
             pass
+            
+    if live_price <= 0.0:
+        return {
+            "risk_approved": False, 
+            "errors": [f"FATAL: Risk Desk could not resolve live price for {ticker}. Aborting."]
+        }
             
     cash_available = get_available_cash()
     requested_trade_value = cash_available * allocation

@@ -56,9 +56,11 @@ async def parser_node(state: FinancialSwarmState) -> dict:
         ticker = extraction.ticker.strip(" \n\"'").upper()
         asset_class = extraction.asset_class.strip().lower()
     except Exception as e:
-        return {"errors": [f"Parser Agent Extraction Failed: {str(e)}"]}
+        # Force graph termination by injecting an error
+        return {"errors": [f"Parser Extraction Failed: {str(e)}"]}
     
     if ticker == "UNKNOWN" or not ticker:
-        return {"errors": ["Parser Agent: Could not resolve a valid ticker symbol from the prompt."]}
+        # Halt the graph instead of passing garbage downstream
+        return {"errors": ["Parser Agent: Could not resolve a valid ticker symbol. Halting execution."]}
 
     return {"current_ticker": ticker, "asset_class": asset_class}

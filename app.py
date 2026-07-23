@@ -14,11 +14,11 @@ if st.button("Deploy Swarm"):
     else:
         with st.spinner("🧬 Swarm Consensus Pipeline Active..."):
             try:
-                # Fire the request to your FastAPI backend
+                # Bump the timeout to 5 minutes so Tenacity actually has time to retry
                 response = requests.post(
                     "http://127.0.0.1:8000/api/v1/analyze", 
                     json={"directive": directive, "paper_trading": paper_trading},
-                    timeout=120 # Give the poor LLMs a fighting chance (120 seconds)
+                    timeout=300 
                 )
                 
                 if response.status_code == 200:

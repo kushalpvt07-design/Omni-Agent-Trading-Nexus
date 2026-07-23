@@ -24,16 +24,18 @@ def execution_agent_node(state):
     trade["shares"] = shares
     
     is_paper = state.get("paper_trading_enabled", True)
+    asset_class = state.get("asset_class", "equity") # Pull the class from the state
     
-    # Initialize Alpaca Client (paper=True for simulation, False for live capital)
     client = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=is_paper)
     
-    # Build the order payload
+    # Dynamic TimeInForce based on asset class
+    tif = TimeInForce.GTC if asset_class == "crypto" else TimeInForce.DAY
+    
     order_data = MarketOrderRequest(
         symbol=ticker,
         qty=shares,
         side=OrderSide.BUY if action == "BUY" else OrderSide.SELL,
-        time_in_force=TimeInForce.DAY
+        time_in_force=tif
     )
     
     try:
