@@ -34,10 +34,9 @@ async def parser_node(state: FinancialSwarmState) -> dict:
 
     # 2. Fallback to LLM only if Regex fails (or input is natural language company name)
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-3-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash"
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)

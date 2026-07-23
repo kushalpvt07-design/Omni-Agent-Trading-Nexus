@@ -41,13 +41,9 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
 
     # 2. Initialize the Gemini Model with a robust fallback list
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-3-flash",
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite",
-        "gemini-3-flash-live",
-        "gemini-flash-latest",
-        "gemini-2.5-flash"
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)

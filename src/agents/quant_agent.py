@@ -12,6 +12,10 @@ class TickerExtraction(BaseModel):
 from langchain_core.messages import HumanMessage
 
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
+    # ADD THIS GUARD: Skip execution if upstream errors exist
+    if state.get("errors"):
+        return {}
+
     ticker = state.get("current_ticker", "")
     asset_class = state.get("asset_class", "equity")
     if ticker == "UNKNOWN" or not ticker:
