@@ -1,5 +1,6 @@
 import json
 import yfinance as yf
+import requests
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("SentimentServer")
@@ -14,12 +15,13 @@ def analyze_market_sentiment(ticker: str) -> str:
     yf_ticker = f"{ticker_upper}-USD" if ticker_upper in crypto_assets else ticker_upper
     
     try:
-        stock = yf.Ticker(yf_ticker)
+        vanilla_session = requests.Session()
+        stock = yf.Ticker(yf_ticker, session=vanilla_session)
         news = stock.news
         
         headlines = []
         if news:
-            for item in news[:5]:
+            for item in news[:2]:
                 content = item.get("content", {})
                 title = content.get("title") or item.get("title", "")
                 summary = content.get("summary") or item.get("summary", "")

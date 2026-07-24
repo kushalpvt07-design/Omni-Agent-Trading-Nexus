@@ -61,7 +61,7 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             })
 
         history_data = []
-        for idx, row in bars.tail(30).iterrows():
+        for idx, row in bars.tail(5).iterrows():
             history_data.append({
                 "date": idx[1].strftime("%Y-%m-%d"),
                 "close": round(row["close"], 2),

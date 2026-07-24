@@ -1,4 +1,5 @@
 import yfinance as yf
+import requests
 import numpy as np
 
 def get_live_asset_data(ticker: str):
@@ -10,7 +11,8 @@ def get_live_asset_data(ticker: str):
         clean_ticker = f"{clean_ticker}-USD"
 
     try:
-        stock = yf.Ticker(clean_ticker)
+        vanilla_session = requests.Session()
+        stock = yf.Ticker(clean_ticker, session=vanilla_session)
         # Fetch 1 month of historical daily data for the chart
         hist = stock.history(period="1mo", interval="1d")
         

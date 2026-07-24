@@ -4,7 +4,7 @@ from typing import Literal
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from src.state import FinancialSwarmState
-from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
 import google.api_core.exceptions
 
 class OrchestratorDirective(BaseModel):
@@ -22,9 +22,8 @@ class OrchestratorDirective(BaseModel):
         return self
 
 @retry(
-    retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
-    wait=wait_exponential_jitter(initial=1, max=15, exp_base=2, jitter=1),
-    stop=stop_after_attempt(4)
+    stop=stop_after_attempt(7),
+    wait=wait_exponential(multiplier=2, min=4, max=30)
 )
 async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context):
     return await structured_llm.ainvoke([
@@ -77,6 +76,9 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     )
 
     print("\nGemini Orchestrator is analyzing the swarm data...")
+    import asyncio
+    print("[SYSTEM STATUS]: Pacing API to avoid rate limit death. Breathing for 3 seconds...")
+    await asyncio.sleep(3)
 
     try:
         decision: OrchestratorDirective = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
@@ -112,4 +114,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         }
         
     except Exception as e:
-        return {"errors": [f"STATUS: ERROR - LLM Timeout/Rate Limit Exceeded: {str(e)}"]}
+        err_msg = f"STATUS: ERROR - LLM Timeout/Rate Limit Exceeded: {str(e)}"
+        return {
+            "errors": [err_msg],
+            "messages": [AIMessage(content=f"🚨 Orchestrator Error: {err_msg}")]
+        }

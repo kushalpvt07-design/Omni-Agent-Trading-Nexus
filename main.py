@@ -163,6 +163,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                         # 2. Send Node Output Message if available
                         if isinstance(node_state, dict):
+                            errors = node_state.get("errors", [])
+                            if errors:
+                                for err in errors:
+                                    await websocket.send_json({
+                                        "type": "message",
+                                        "role": "SYSTEM ERROR",
+                                        "content": f"🚨 {err}"
+                                    })
+                                    
                             messages = node_state.get("messages", [])
                             if messages:
                                 content = getattr(messages[-1], "content", str(messages[-1]))
