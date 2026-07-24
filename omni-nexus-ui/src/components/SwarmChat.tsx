@@ -5,12 +5,13 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Send } from "lucide-react"
+import { LogMessage } from "@/hooks/useSwarmWebSocket"
 
 // FACT: Pass the active hook state as props so you don't fork the connection.
 interface SwarmChatProps {
   deployDirective: (directive: string) => void;
   isConnected: boolean;
-  externalLogs: { role: string, content: string, type: string }[];
+  externalLogs: LogMessage[];
 }
 
 export function SwarmChat({ deployDirective, isConnected, externalLogs }: SwarmChatProps) {
@@ -31,7 +32,7 @@ export function SwarmChat({ deployDirective, isConnected, externalLogs }: SwarmC
 
   // Filter logs to only show relevant chat messages (ignoring pure state updates)
   const chatLogs = externalLogs.filter(log => 
-    ["message", "status", "checkpoint", "user"].includes(log.type)
+    log.type !== undefined && ["message", "status", "checkpoint", "user"].includes(log.type)
   )
 
   return (
