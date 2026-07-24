@@ -6,8 +6,6 @@ from langchain_core.messages import HumanMessage
 from schemas import TradeDirectiveSchema
 
 
-import re
-
 async def parser_node(state: FinancialSwarmState) -> dict:
     latest_message = ""
     for msg in reversed(state.get("messages", [])):
@@ -15,30 +13,15 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             latest_message = msg.content
             break
 
-    # 1. Deterministic Regex Extraction (0 API calls, 0 ms delay)
-    tickers = re.findall(r'\b[A-Z]{1,5}\b', latest_message)
-    # Exclude common English false positives
-    tickers = [t for t in tickers if t not in {"BUY", "SELL", "A", "I", "FOR", "THE", "OF", "TO", "IN"}]
-    
-    crypto_assets = {"BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "LINK"}
-    
-    if tickers:
-        ticker = tickers[0]
-        if ticker in crypto_assets:
-            return {"current_ticker": f"{ticker}/USD", "asset_class": "crypto"}
-        return {"current_ticker": ticker, "asset_class": "equity"}
-
     models_to_try = [
+        "gemini-2.0-flash",
+        "gemini-2.5-flash-lite",
         "gemini-3.5-flash",
         "gemini-2.5-flash",
         "gemini-3-flash",
         "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-tts",
         "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
-        "gemini-3.1-flash-tts",
-        "gemini-2.0-flash",
         "gemini-1.5-flash"
     ]
     

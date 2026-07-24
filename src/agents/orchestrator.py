@@ -1,22 +1,30 @@
 import os
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Literal
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from src.state import FinancialSwarmState
 from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
 import google.api_core.exceptions
 
-# 1. The Strict Schema remains exactly the same
-class TradeDecision(BaseModel):
-    action: str = Field(description="Must be exactly 'BUY', 'SELL', or 'HOLD'")
-    ticker: str = Field(description="The exact stock ticker symbol, e.g., 'AAPL'")
-    allocation: float = Field(description="Target percentage as a strict decimal between 0.0 and 1.0 (e.g., 18% is 0.18). NEVER output > 1.0.")
-    reasoning: str = Field(description="A 2-sentence explanation of the market data. DO NOT calculate shares, do not mention portfolio cash, and do not output position sizes. NO MATH.")
+class OrchestratorDirective(BaseModel):
+    action: Literal["BUY", "SELL", "HOLD", "REJECT"] = Field(...)
+    shares: float = Field(..., description="Number of shares. MUST be 0.0 if Action is REJECT.")
+    reasoning: str
+
+    @model_validator(mode='after')
+    def enforce_consistency(self):
+        if self.action == "REJECT" and self.shares > 0:
+            self.shares = 0.0
+        elif self.shares <= 0.0 and self.action != "HOLD":
+            self.action = "REJECT"
+            self.shares = 0.0
+        return self
 
 @retry(
     retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
-    wait=wait_exponential_jitter(initial=1, max=15, exp_base=2, jitter=1), # Cap the wait at 15s, not 60s
-    stop=stop_after_attempt(4) # Kill it faster if the API is truly dead
+    wait=wait_exponential_jitter(initial=1, max=15, exp_base=2, jitter=1),
+    stop=stop_after_attempt(4)
 )
 async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context):
     return await structured_llm.ainvoke([
@@ -25,10 +33,6 @@ async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_conte
     ])
 
 async def orchestrator_node(state: FinancialSwarmState) -> dict:
-    """
-    The True Brain. Passes the raw data to the Gemini LLM to reason over and 
-    make a structured financial decision.
-    """
     user_request = "No request."
     for msg in reversed(state.get("messages", [])):
         if isinstance(msg, HumanMessage):
@@ -41,28 +45,18 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     
     requested_action = state.get("requested_action", "BUY")
     requested_quantity = state.get("requested_quantity")
-    requested_allocation = state.get("requested_allocation")
-
 
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-3-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-tts",
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.1-flash-tts",
         "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-1.5-flash",
+        "gemini-1.5-pro"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
-    structured_llm = primary_llm.with_structured_output(TradeDecision)
+    structured_llm = primary_llm.with_structured_output(OrchestratorDirective)
     
     fallbacks = [
-        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(TradeDecision)
+        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(OrchestratorDirective)
         for m in models_to_try[1:]
     ]
     
@@ -70,11 +64,9 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
 
     system_prompt = (
         "You are an elite autonomous financial orchestrator. "
-        "Analyze the provided quantitative data and qualitative market sentiment. "
-        "Your job is to synthesize this data and make a final trading decision. "
-        "Do not calculate shares. Only output the target portfolio allocation percentage as a float between 0.0 and 1.0. "
-        "CRITICAL RULE: If the quantitative data indicates that the target ticker is missing, delisted, invalid, or DATA_CORRUPT, you MUST reject the trade. Set the action to 'HOLD', allocation to 0.0, and state this failure in your reasoning, completely ignoring any bullish sentiment data. "
-        "If the data is valid and indicates bullish patterns or confirmations matching the user request, authorize the trade."
+        "Analyze the provided quantitative data and qualitative market sentiment to make a final trading decision. "
+        "CRITICAL RULE: If the quantitative data is missing, corrupted, or shows 0 volume, you MUST output action='REJECT' and shares=0.0. "
+        "Under NO circumstances should you output a 'BUY' or 'SELL' action if valid market data is missing."
     )
     
     analysis_context = (
@@ -87,26 +79,29 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     print("\nGemini Orchestrator is analyzing the swarm data...")
 
     try:
-        # 3. Invoke the Gemini LLM with exponential backoff
-        decision: TradeDecision = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
+        decision: OrchestratorDirective = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
-        final_action = requested_action if requested_action else decision.action
-        final_allocation = float(requested_allocation) if requested_allocation is not None else decision.allocation
-        final_shares = float(requested_quantity) if requested_quantity is not None else 0.0
+        # FIX: Honor the LLM's rejection over the user's initial request
+        if decision.action == "REJECT" or decision.shares == 0.0:
+            final_action = "REJECT"
+            final_shares = 0.0
+        else:
+            final_action = requested_action if requested_action else decision.action
+            final_shares = float(requested_quantity) if requested_quantity is not None else decision.shares
 
         proposed_trade = {
-            "ticker": active_ticker, # HARD OVERRIDE: Use state ticker (ETH/USD), not decision.ticker (ETH)
+            "ticker": active_ticker,
             "action": final_action,
-            "allocation": 0.0 if final_shares > 0 else final_allocation,
+            "allocation": 0.0,
             "shares": final_shares,
             "estimated_price": 0.0,
             "reasoning": decision.reasoning
         }
         
-        report_qty = f"{final_shares} Shares" if final_shares > 0 else f"{final_allocation*100:.1f}% Allocation"
+        report_qty = f"{final_shares} Shares" if final_shares > 0 else ""
         
         final_report = (
-            f"**AI Swarm Analysis Complete for {decision.ticker}**\n\n"
+            f"**AI Swarm Analysis Complete for {active_ticker}**\n\n"
             f"**Action:** {final_action} {report_qty}\n"
             f"**Reasoning:** {decision.reasoning}"
         )
@@ -117,4 +112,4 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         }
         
     except Exception as e:
-        return {"errors": ["STATUS: ERROR - LLM Timeout/Rate Limit Exceeded. Validation failed after retries."]}
+        return {"errors": [f"STATUS: ERROR - LLM Timeout/Rate Limit Exceeded: {str(e)}"]}

@@ -17,6 +17,20 @@ def route_after_pre_flight(state: FinancialSwarmState):
         return END
     return ["quant_agent", "sentiment_agent"]
 
+def route_after_orchestrator(state: FinancialSwarmState):
+    proposed_trade = state.get("proposed_trade", {})
+    action = proposed_trade.get("action", "")
+    allocation = proposed_trade.get("allocation", 0.0)
+    shares = proposed_trade.get("shares", 0.0)
+    
+    # If the orchestrator rejected the trade, or if shares are zeroed, kill the pipeline.
+    if action == "REJECT" or state.get("shares", 0.0) <= 0.0:
+        print("[SYSTEM]: Trade rejected by Orchestrator. Aborting pipeline.")
+        return END
+    
+    # Otherwise, proceed to risk management
+    return "risk_agent"
+
 def build_graph():
     workflow = StateGraph(FinancialSwarmState)
     workflow.add_node("parser_node", parser_node)
@@ -33,7 +47,7 @@ def build_graph():
     workflow.add_conditional_edges("pre_flight_risk", route_after_pre_flight)
     
     workflow.add_edge(["quant_agent", "sentiment_agent"], "orchestrator")
-    workflow.add_edge("orchestrator", "risk_agent")
+    workflow.add_conditional_edges("orchestrator", route_after_orchestrator, {END: END, "risk_agent": "risk_agent"})
     workflow.add_edge("risk_agent", "execution_agent")
     workflow.add_edge("execution_agent", END)
     

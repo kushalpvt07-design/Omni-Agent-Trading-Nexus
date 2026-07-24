@@ -3,6 +3,8 @@
 import React, { useState } from 'react';
 import { useSwarmWebSocket } from '@/hooks/useSwarmWebSocket';
 import { AreaChart } from '@tremor/react';
+import SwarmDirectiveInput from '@/components/SwarmDirectiveInput';
+import AssetIntelligence from '@/components/AssetIntelligence';
 
 
 export default function OmniAgentNexus() {
@@ -39,82 +41,17 @@ export default function OmniAgentNexus() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* TOP LEFT: SWARM DIRECTIVE INPUT */}
-        {/* CSS FIX: Add overflow-hidden to every card container! */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col h-[400px] overflow-hidden">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-semibold text-slate-100 uppercase tracking-wide">Swarm Directive Input</h3>
-            <span className="text-xs text-emerald-500 flex items-center gap-1">
-              ✓ Hardened Input Enabled
-            </span>
-          </div>
-          <div className="flex-1 bg-slate-950 rounded border border-slate-800 p-4 overflow-y-auto mb-4 font-mono text-sm space-y-4">
-            {state.directiveLogs.length > 0 ? (
-              state.directiveLogs.map((log, i) => (
-                <p key={i} className="text-slate-400">{log}</p>
-              ))
-            ) : (
-              <p className="text-slate-600 italic">No directives processed yet. The terminal is on standby.</p>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              value={inputDirective} 
-              onChange={(e) => setInputDirective(e.target.value)}
-              disabled={state.isDeploying}
-              className="flex-1 bg-slate-950 border border-slate-800 rounded px-4 py-3 font-mono text-sm text-slate-200 disabled:opacity-50"
-            />
-            <button 
-              onClick={() => {
-                deployDirective(inputDirective);
-                setInputDirective('');
-              }}
-              disabled={state.isDeploying || !state.isConnected}
-              className="bg-teal-800 hover:bg-teal-700 disabled:bg-slate-800 disabled:text-slate-500 text-teal-100 font-semibold px-6 py-3 rounded uppercase tracking-wider transition-colors">
-              {state.isDeploying ? 'Deploying...' : 'Deploy'}
-            </button>
-          </div>
+        <div className="h-[400px]">
+          <SwarmDirectiveInput 
+            logs={state.directiveLogs}
+            isDeploying={state.isDeploying}
+            onSendDirective={deployDirective}
+          />
         </div>
 
         {/* TOP RIGHT: ASSET INTELLIGENCE */}
-        {/* CSS FIX: Apply overflow-hidden to card! */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col h-[400px] overflow-hidden">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-semibold text-slate-100 uppercase tracking-wide">
-              Asset Intelligence - {state.pendingAction?.ticker || 'AWAITING DIRECTIVE'}
-            </h3>
-            <span className="text-slate-500 text-xl leading-none">⚙</span>
-          </div>
-          <div className="flex justify-between mb-4 text-sm">
-            <div>
-              <p className="text-slate-500">Current Price</p>
-              <p className="text-xl font-bold text-slate-100">$229.22</p>
-            </div>
-            <div>
-              <p className="text-slate-500">Change</p>
-              <p className="text-emerald-500">+0.75 (+0.0%)</p>
-            </div>
-            <div className="text-right">
-              <p className="text-slate-500">30-Day Volatility Risk</p>
-              <p className="text-red-400">17.4% High Risk</p>
-            </div>
-          </div>
-          {/* CSS FIX: Explicit overflow-hidden on chart container! */}
-          <div className="flex-1 bg-slate-950 border border-slate-800 rounded overflow-hidden flex items-center justify-center text-slate-600">
-            {state.isConnected && state.chartData && state.chartData.length > 0 ? (
-              <AreaChart
-                className="h-full w-full pt-4"
-                data={state.chartData}
-                index="date"
-                categories={["close"]}
-                colors={["teal"]}
-                showYAxis={false}
-                showLegend={false}
-              />
-            ) : (
-              <p className="italic text-center px-4">Graph inactive. Nexus is on standby.</p>
-            )}
-          </div>
+        <div className="h-[400px]">
+          <AssetIntelligence assetData={state.assetData} />
         </div>
 
         {/* MID LEFT: SENTIMENT SOURCE INTEL */}

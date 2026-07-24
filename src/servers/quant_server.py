@@ -25,9 +25,11 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         start_date = datetime.now() - timedelta(days=45) # Fetch enough data for 30 trading days
         
         if asset_class == "crypto":
+            # Alpaca DEMANDS the slash for crypto. Force it here.
+            alpaca_ticker = ticker_upper.replace("-", "/")
             client = CryptoHistoricalDataClient(api_key, secret_key)
             request_params = CryptoBarsRequest(
-                symbol_or_symbols=[ticker_upper],
+                symbol_or_symbols=[alpaca_ticker],
                 timeframe=TimeFrame.Day,
                 start=start_date
             )

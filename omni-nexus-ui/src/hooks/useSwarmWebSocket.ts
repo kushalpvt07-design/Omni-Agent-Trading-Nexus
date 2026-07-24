@@ -2,13 +2,21 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-// Define the strict schemas your parser is supposed to be sending
+export interface LogMessage {
+  id: string;
+  role: string;
+  content: string;
+  type?: "user" | "status" | "message" | "checkpoint";
+  timestamp: string;
+}
+
 export interface SwarmState {
   isConnected: boolean;
   isDeploying: boolean;
   activeAgent: 'idle' | 'parser' | 'sentiment' | 'quant' | 'orchestrator' | 'risk' | 'action_center';
   chartData: any[];
-  directiveLogs: string[];
+  assetData: any | null;
+  directiveLogs: LogMessage[];
   newsIntel: { headline: string; quantImpact: 'High' | 'Med' | 'Low'; score: number; }[];
   pipelineStatus: {
     parser: 'pending' | 'active' | 'complete' | 'error';
@@ -31,6 +39,7 @@ export function useSwarmWebSocket(url: string) {
     isDeploying: false,
     activeAgent: 'idle',
     chartData: [],
+    assetData: null,
     directiveLogs: [],
     newsIntel: [],
     pipelineStatus: {
@@ -88,7 +97,41 @@ export function useSwarmWebSocket(url: string) {
           }));
         }
 
-        // Handle raw system logs
+        // Handle Asset Intelligence
+        if (payload.type === 'asset_intelligence') {
+          setState(prev => ({
+            ...prev,
+            assetData: payload.data || null
+          }));
+        }
+
+        // General logging for anything with content
+        if (payload.content) {
+          const timeString = new Date().toLocaleTimeString();
+          const newLog: LogMessage = {
+            id: Math.random().toString(36).substring(2, 9),
+            role: payload.role || "SYSTEM",
+            content: payload.content,
+            type: payload.type || "message",
+            timestamp: timeString,
+          };
+          setState(prev => ({
+            ...prev,
+            directiveLogs: [...prev.directiveLogs, newLog]
+          }));
+
+          // THE FIX: Catch the early termination or the HITL checkpoint
+          if (
+              typeof payload.content === 'string' && (
+                payload.content.includes("Swarm pipeline execution cycle finished") || 
+                payload.content.includes("Pipeline reached Human-in-the-Loop checkpoint")
+              )
+          ) {
+              setState(prev => ({ ...prev, isDeploying: false }));
+          }
+        }
+
+        // Handle raw system logs (Pipeline status updates)
         if (payload.type === 'message') {
           const roleMap: Record<string, keyof SwarmState['pipelineStatus']> = {
             'Parser': 'parser',
@@ -99,19 +142,20 @@ export function useSwarmWebSocket(url: string) {
           };
           const node = roleMap[payload.role];
           
-          let nextAgent: SwarmState['activeAgent'] = prev.activeAgent;
-          if (payload.role === 'Parser') nextAgent = 'sentiment';
-          else if (payload.role === 'Sentiment') nextAgent = 'quant';
-          else if (payload.role === 'Quant') nextAgent = 'orchestrator';
-          else if (payload.role === 'Orchestrator') nextAgent = 'risk';
-          else if (payload.role === 'Risk') nextAgent = 'action_center';
+          setState(prev => {
+            let nextAgent: SwarmState['activeAgent'] = prev.activeAgent;
+            if (payload.role === 'Parser') nextAgent = 'sentiment';
+            else if (payload.role === 'Sentiment') nextAgent = 'quant';
+            else if (payload.role === 'Quant') nextAgent = 'orchestrator';
+            else if (payload.role === 'Orchestrator') nextAgent = 'risk';
+            else if (payload.role === 'Risk') nextAgent = 'action_center';
 
-          setState(prev => ({
-            ...prev,
-            activeAgent: nextAgent,
-            directiveLogs: [...prev.directiveLogs, `[${payload.role}] ${payload.content}`],
-            pipelineStatus: node ? { ...prev.pipelineStatus, [node]: 'complete' as const } : prev.pipelineStatus
-          }));
+            return {
+              ...prev,
+              activeAgent: nextAgent,
+              pipelineStatus: node ? { ...prev.pipelineStatus, [node]: 'complete' as const } : prev.pipelineStatus
+            };
+          });
         }
       } catch (error) {
         console.error("Critical failure: The FastAPI backend sent malformed JSON.", error);
@@ -134,11 +178,20 @@ export function useSwarmWebSocket(url: string) {
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       // Optimistic state updates
+      const timeString = new Date().toLocaleTimeString();
+      const newLog: LogMessage = {
+        id: Math.random().toString(36).substring(2, 9),
+        role: "USER",
+        content: directive,
+        type: "user",
+        timestamp: timeString,
+      };
+
       setState(prev => ({
         ...prev,
         isDeploying: true,
         activeAgent: 'parser',
-        directiveLogs: [...prev.directiveLogs, `[User] ${directive}`],
+        directiveLogs: [...prev.directiveLogs, newLog],
         chartData: [] // reset chart data
       }));
       

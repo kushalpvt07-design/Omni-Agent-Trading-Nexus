@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from swarm import build_graph # Import the blueprint, not the compiled app
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from fastapi.middleware.cors import CORSMiddleware
+from utils import get_live_asset_data
 
 app = FastAPI(
     title="Omni-Agent Trading Nexus API",
@@ -119,88 +120,79 @@ async def websocket_endpoint(websocket: WebSocket):
                 # ---------------------------------------------------------
                 # STANDARD EXECUTION: Process a new directive
                 # ---------------------------------------------------------
-                raw_directive = payload.get("directive", "")
-                directive = sanitize_raw_input(raw_directive)
-                
-                if not directive:
+                raw_directive = payload.get("directive", "").strip()
+                if not raw_directive:
                     continue
-                
+
+                # Initial state
                 initial_state = {
-                    "messages": [HumanMessage(content=directive)],
+                    "messages": [HumanMessage(content=raw_directive)],
                     "paper_trading_enabled": payload.get("paper_trading", True),
-                    "quant_data": {}, 
-                    "sentiment_data": {}, 
-                    "current_ticker": "", 
+                    "quant_data": {},
+                    "sentiment_data": {},
+                    "current_ticker": "",
                     "proposed_trade": {},
-                    "risk_approved": False, 
+                    "risk_approved": False,
                     "errors": []
                 }
-                
-                # Stream events normally up until the interrupt barrier
+
+                # Map of nodes to user-friendly phase messages
+                PHASE_LABELS = {
+                    "parser_node": "Parser Agent: Extracting structured parameters from prompt...",
+                    "sentiment_agent": "Sentiment Agent: Scraping news feed & calculating market bias...",
+                    "quant_agent": "Quant Agent: Analyzing technical indicators & volatility...",
+                    "orchestrator": "Orchestrator Agent: Synthesizing swarm intelligence...",
+                    "risk_agent": "Risk Desk: Checking exposure limits & compliance thresholds...",
+                    "sentiment_node": "Sentiment Agent: Scraping news feed & calculating market bias...",
+                    "quant_node": "Quant Agent: Analyzing technical indicators & volatility...",
+                    "orchestrator_node": "Orchestrator Agent: Synthesizing swarm intelligence...",
+                    "risk_node": "Risk Desk: Checking exposure limits & compliance thresholds...",
+                    "execution_agent": "Execution Agent: Order execution ready."
+                }
+
+                # Stream LangGraph execution step-by-step
                 async for event in trading_swarm.astream(initial_state, config=config, stream_mode="updates"):
                     for node_name, node_state in event.items():
-                        if not isinstance(node_state, dict):
-                            continue
-                            
-                        messages = node_state.get("messages", [])
-                        if messages:
-                            content = getattr(messages[-1], "content", str(messages[-1]))
-                            
-                            # Determine role based on which agent just finished
-                            role_map = {
-                                "parser_agent": "Parser",
-                                "sentiment_agent": "Sentiment",
-                                "quant_agent": "Quant",
-                                "orchestrator": "Orchestrator",
-                                "risk_agent": "Risk"
-                            }
-                            role_name = role_map.get(node_name, node_name.capitalize())
-                            
-                            await websocket.send_json({
-                                "type": "message",
-                                "role": role_name,
-                                "content": content
-                            })
-                            
-                        # INJECT MOCK OHLC DATA ONCE PARSER IS DONE
-                        if node_name == "parser_agent" and node_state.get("current_ticker"):
-                            import random
-                            ticker = node_state["current_ticker"]
-                            base_price = 150.0 if "USD" not in ticker else 60000.0
-                            chart_data = []
-                            for i in range(30):
-                                open_p = base_price + random.uniform(-3, 3)
-                                close_p = open_p + random.uniform(-2, 2)
-                                chart_data.append({
-                                    "date": f"Day {i+1}",
-                                    "open": open_p,
-                                    "high": max(open_p, close_p) + random.uniform(0, 1),
-                                    "low": min(open_p, close_p) - random.uniform(0, 1),
-                                    "close": close_p
+                        # 1. Send Phase Status update
+                        phase_text = PHASE_LABELS.get(node_name, f"Executing node: {node_name}...")
+                        await websocket.send_json({
+                            "type": "status",
+                            "role": "SYSTEM",
+                            "content": f"⚡ [PHASE ENTERED] {phase_text}"
+                        })
+
+                        # 2. Send Node Output Message if available
+                        if isinstance(node_state, dict):
+                            messages = node_state.get("messages", [])
+                            if messages:
+                                content = getattr(messages[-1], "content", str(messages[-1]))
+                                agent_role = node_name.replace("_node", "").replace("_agent", "").upper()
+                                
+                                await websocket.send_json({
+                                    "type": "message",
+                                    "role": agent_role,
+                                    "content": content
                                 })
-                                base_price = close_p
-                            await websocket.send_json({
-                                "type": "chart_data",
-                                "ticker": ticker,
-                                "data": chart_data
-                            })
-                        
-                        if node_state.get("errors"):
-                            await websocket.send_json({
-                                "type": "message",
-                                "role": "System Alert",
-                                "content": " | ".join(node_state["errors"])
-                            })
-                            
-                # CRITICAL: Inspect the graph state to see if it paused at the execution gate
+
+                        # INJECT LIVE OHLC DATA ONCE PARSER IS DONE
+                        if node_name == "parser_node":
+                            extracted_ticker = node_state.get("current_ticker") 
+                            if extracted_ticker:
+                                live_data = get_live_asset_data(extracted_ticker)
+                                if live_data:
+                                    await websocket.send_json({
+                                        "type": "asset_intelligence",
+                                        "data": live_data
+                                    })
+
+                # Checkpoint reach or final output
                 current_state = await trading_swarm.aget_state(config)
                 if current_state.next and "execution_agent" in current_state.next:
                     proposed_trade = current_state.values.get("proposed_trade", {})
-                    # Blast this event to Next.js so the React state updates and unhides the Approve/Reject buttons
                     await websocket.send_json({
                         "type": "checkpoint",
-                        "role": "System",
-                        "content": "Awaiting human authorization to execute live trade.",
+                        "role": "SYSTEM",
+                        "content": "⏸️ Pipeline reached Human-in-the-Loop checkpoint. Awaiting authorization.",
                         "trade_details": {
                             "ticker": proposed_trade.get("ticker", "UNKNOWN"),
                             "action": proposed_trade.get("action", "REVIEW"),
@@ -210,10 +202,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                 else:
                     await websocket.send_json({
-                        "type": "message",
-                        "role": "System",
-                        "content": "Swarm pipeline execution finished or aborted by Risk Desk."
+                        "type": "status",
+                        "role": "SYSTEM",
+                        "content": "✅ Swarm pipeline execution cycle finished."
                     })
-                    
-        except WebSocketDisconnect:
-            print(f"Client disconnected from Swarm stream: {session_id}")
+
+        except (WebSocketDisconnect, RuntimeError):
+            print(f"Socket disconnected for session {session_id}")
