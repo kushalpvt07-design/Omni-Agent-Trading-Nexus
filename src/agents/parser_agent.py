@@ -4,8 +4,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from src.state import FinancialSwarmState
 from langchain_core.messages import HumanMessage
 from schemas import TradeDirectiveSchema
-
-
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 @retry(
@@ -22,15 +20,10 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             latest_message = msg.content
             break
 
+    # FIXED: Only using valid production models. No hallucinations.
     models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-3.5-flash",
         "gemini-2.5-flash",
-        "gemini-3-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
+        "gemini-2.5-flash-lite",
         "gemini-1.5-flash"
     ]
     
@@ -68,18 +61,15 @@ async def parser_node(state: FinancialSwarmState) -> dict:
         asset_class = getattr(extraction, "asset_class", "equity") or "equity"
         asset_class = asset_class.strip().lower()
 
-        # Capture explicitly requested trade directives
         action = getattr(extraction, "action", "BUY") or "BUY"
         quantity = getattr(extraction, "quantity", None)
         allocation_percentage = getattr(extraction, "allocation_percentage", None)
         risk_threshold = getattr(extraction, "risk_threshold", 0.5) or 0.5
 
     except Exception as e:
-        # Force graph termination by injecting an error
         return {"errors": [f"Parser Extraction Failed: {str(e)}"]}
     
     if ticker == "UNKNOWN" or not ticker:
-        # Halt the graph instead of passing garbage downstream
         return {"errors": ["Parser Agent: Could not resolve a valid ticker symbol. Halting execution."]}
 
     return {

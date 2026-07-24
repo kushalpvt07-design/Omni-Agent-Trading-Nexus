@@ -6,18 +6,24 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("SentimentServer")
 
 @mcp.tool()
-def analyze_market_sentiment(ticker: str) -> str:
+def analyze_market_sentiment(ticker: str, asset_class: str = "equity") -> str:
     """Fetches real market news using yfinance for sentiment analysis."""
-    ticker_upper = ''.join(e for e in ticker.upper() if e.isalnum())
+    ticker_upper = ''.join(e for e in ticker.upper() if e.isalnum() or e in ['.', '-', '/'])
+    clean_ticker = ticker_upper.replace("/", "-")
     
-    # Map cryptocurrencies to Yahoo Finance's format
-    crypto_assets = {"BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "DOT", "LINK"}
-    yf_ticker = f"{ticker_upper}-USD" if ticker_upper in crypto_assets else ticker_upper
+    # If it's a crypto asset, strictly enforce the Yahoo Finance format
+    if asset_class == "crypto" or "/" in ticker_upper:
+        yf_ticker = clean_ticker if "-" in clean_ticker else f"{clean_ticker}-USD"
+    else:
+        yf_ticker = clean_ticker
     
     try:
-        vanilla_session = requests.Session()
-        stock = yf.Ticker(yf_ticker, session=vanilla_session)
-        news = stock.news
+        with requests.Session() as clean_session:
+            clean_session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
+            stock = yf.Ticker(yf_ticker, session=clean_session)
+            news = stock.news
         
         headlines = []
         if news:
@@ -28,11 +34,11 @@ def analyze_market_sentiment(ticker: str) -> str:
                 if title:
                     headlines.append(f"Title: {title} | Summary: {summary}")
         else:
-            headlines.append(f"No recent news found for {ticker_upper}.")
+            headlines.append(f"No recent news found for {yf_ticker}.")
             
         payload = {
             "status": "success",
-            "ticker": ticker_upper,
+            "ticker": yf_ticker,
             "latest_headlines": headlines
         }
         

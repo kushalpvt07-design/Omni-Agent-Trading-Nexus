@@ -10,7 +10,7 @@ if "GEMINI_API_KEY" in os.environ:
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from schemas import TradeRequest, TradeResponse
 from langchain_core.messages import HumanMessage
-from swarm import build_graph # Import the blueprint, not the compiled app
+from swarm import build_graph 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from fastapi.middleware.cors import CORSMiddleware
 from utils import get_live_asset_data
@@ -36,11 +36,9 @@ def sanitize_raw_input(raw_text: str) -> str:
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     return clean_text[:500] 
 
-# Stateless POST endpoint for your Streamlit toy UI
 @app.post("/api/v1/analyze", response_model=TradeResponse)
 async def analyze_trade(request: TradeRequest):
     try:
-        # Compile on the fly without a checkpointer for the stateless REST call
         stateless_swarm = build_graph().compile()
         
         initial_state = {
@@ -49,6 +47,7 @@ async def analyze_trade(request: TradeRequest):
             "quant_data": {}, 
             "sentiment_data": {}, 
             "current_ticker": "", 
+            "asset_class": "equity", # FIX: Explicitly initialize
             "proposed_trade": {},
             "risk_approved": False, 
             "errors": []
@@ -72,16 +71,11 @@ async def analyze_trade(request: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Swarm execution failed: {str(e)}")
 
-
-# Stateful WebSocket for your actual React Dashboard
 @app.websocket("/api/v1/swarm-stream")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    # You MUST use a checkpointer to persist the thread state while waiting for approval
     async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
-        
-        # Compile WITH the human interrupt
         trading_swarm = build_graph().compile(
             checkpointer=checkpointer,
             interrupt_before=["execution_agent"]
@@ -95,65 +89,54 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = await websocket.receive_text()
                 payload = json.loads(data)
                 
-                # ---------------------------------------------------------
-                # INTERCEPT: Did the frontend just send an approval action?
-                # ---------------------------------------------------------
                 if payload.get("type") == "human_approval":
                     is_approved = payload.get("approved", False)
                     
                     if is_approved:
                         await websocket.send_json({"type": "message", "role": "System", "content": "Trade Approved. Dispatching to Execution Agent..."})
-                        
-                        # Resume the graph from the exact point it paused by passing None
-                        async for event in trading_swarm.astream(None, config=config, stream_mode="updates"):
-                            for node_name, node_state in event.items():
-                                messages = node_state.get("messages", [])
-                                if messages:
-                                    content = getattr(messages[-1], "content", str(messages[-1]))
-                                    await websocket.send_json({"type": "message", "role": "Execution Hub", "content": content})
                     else:
                         await websocket.send_json({"type": "message", "role": "System Alert", "content": "Trade Rejected by User. Swarm halted."})
+                        # FIX: Update state so the execution agent respects the human veto
+                        await trading_swarm.aupdate_state(config, {"risk_approved": False})
+                    
+                    # FIX: Resume graph execution regardless of choice to clear the checkpoint
+                    async for event in trading_swarm.astream(None, config=config, stream_mode="updates"):
+                        for node_name, node_state in event.items():
+                            messages = node_state.get("messages", [])
+                            if messages:
+                                content = getattr(messages[-1], "content", str(messages[-1]))
+                                await websocket.send_json({"type": "message", "role": "Execution Hub", "content": content})
                     
                     await websocket.send_json({"type": "message", "role": "System", "content": "Transaction cycle closed."})
                     continue
 
-                # ---------------------------------------------------------
-                # STANDARD EXECUTION: Process a new directive
-                # ---------------------------------------------------------
                 raw_directive = payload.get("directive", "").strip()
                 if not raw_directive:
                     continue
-
-                # Initial state
+                
                 initial_state = {
                     "messages": [HumanMessage(content=raw_directive)],
                     "paper_trading_enabled": payload.get("paper_trading", True),
                     "quant_data": {},
                     "sentiment_data": {},
                     "current_ticker": "",
+                    "asset_class": "equity", # FIX: Explicitly initialize
                     "proposed_trade": {},
                     "risk_approved": False,
                     "errors": []
                 }
 
-                # Map of nodes to user-friendly phase messages
                 PHASE_LABELS = {
                     "parser_node": "Parser Agent: Extracting structured parameters from prompt...",
                     "sentiment_agent": "Sentiment Agent: Scraping news feed & calculating market bias...",
                     "quant_agent": "Quant Agent: Analyzing technical indicators & volatility...",
                     "orchestrator": "Orchestrator Agent: Synthesizing swarm intelligence...",
                     "risk_agent": "Risk Desk: Checking exposure limits & compliance thresholds...",
-                    "sentiment_node": "Sentiment Agent: Scraping news feed & calculating market bias...",
-                    "quant_node": "Quant Agent: Analyzing technical indicators & volatility...",
-                    "orchestrator_node": "Orchestrator Agent: Synthesizing swarm intelligence...",
-                    "risk_node": "Risk Desk: Checking exposure limits & compliance thresholds...",
                     "execution_agent": "Execution Agent: Order execution ready."
                 }
 
-                # Stream LangGraph execution step-by-step
                 async for event in trading_swarm.astream(initial_state, config=config, stream_mode="updates"):
                     for node_name, node_state in event.items():
-                        # 1. Send Phase Status update
                         phase_text = PHASE_LABELS.get(node_name, f"Executing node: {node_name}...")
                         await websocket.send_json({
                             "type": "status",
@@ -161,7 +144,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             "content": f"⚡ [PHASE ENTERED] {phase_text}"
                         })
 
-                        # 2. Send Node Output Message if available
                         if isinstance(node_state, dict):
                             errors = node_state.get("errors", [])
                             if errors:
@@ -183,7 +165,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "content": content
                                 })
 
-                        # INJECT LIVE OHLC DATA ONCE PARSER IS DONE
                         if node_name == "parser_node":
                             extracted_ticker = node_state.get("current_ticker") 
                             if extracted_ticker:
@@ -194,7 +175,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                         "data": live_data
                                     })
 
-                # Checkpoint reach or final output
                 current_state = await trading_swarm.aget_state(config)
                 if current_state.next and "execution_agent" in current_state.next:
                     proposed_trade = current_state.values.get("proposed_trade", {})
@@ -218,3 +198,5 @@ async def websocket_endpoint(websocket: WebSocket):
 
         except (WebSocketDisconnect, RuntimeError):
             print(f"Socket disconnected for session {session_id}")
+        except Exception as e:
+            print(f"ERROR inside websocket loop: {e}")

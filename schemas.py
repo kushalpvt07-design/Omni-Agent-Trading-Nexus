@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional, Literal
 
 class TradeRequest(BaseModel):
-    directive: str = Field(..., description="The user's trading command, e.g., 'TSLA market order 10 shares'")
-    paper_trading: bool = Field(default=True, description="Safety flag to prevent real financial ruin")
+    directive: str = Field(..., description="The user's trading command")
+    paper_trading: bool = Field(default=True, description="Safety flag")
 
 class TradeResponse(BaseModel):
     status: str
@@ -15,30 +15,36 @@ class TradeResponse(BaseModel):
     error_message: Optional[str] = None
 
 class TradeDirectiveSchema(BaseModel):
-    is_valid_directive: bool = Field(description="Set to True ONLY if the user provides a specific, unambiguous ticker or company to analyze.")
-    ticker: Optional[str] = Field(default=None, description="The financial asset ticker symbol. For cryptocurrencies, you MUST use a dash (e.g., 'BTC-USD'). Never use a slash.")
-    asset_class: Optional[str] = Field(default=None, description="Must be 'crypto' or 'equity'")
-    rejection_reason: Optional[str] = Field(default=None, description="If is_valid_directive is False, explain why.")
-    action: Optional[str] = Field(default="BUY", description="Must be BUY, SELL, or HOLD.")
-    quantity: Optional[float] = Field(default=None, description="Exact number of shares requested (e.g., 10 shares). DO NOT confuse this with percentage.")
-    allocation_percentage: Optional[float] = Field(default=None, description="Percentage of portfolio to allocate (e.g., 10%).")
-    risk_threshold: Optional[float] = Field(default=0.5, description="Maximum acceptable risk threshold mentioned by user. Defaults to 0.5 (50%)")
+    is_valid_directive: bool = Field(description="Set to True ONLY if the user provides a specific ticker.")
+    ticker: Optional[str] = Field(default=None, description="The financial asset ticker symbol.")
+    asset_class: Literal["crypto", "equity", "unknown"] = Field(default="equity")
+    rejection_reason: Optional[str] = Field(default=None)
+    action: Literal["BUY", "SELL", "HOLD"] = Field(default="HOLD")
+    quantity: Optional[float] = Field(default=None)
+    allocation_percentage: Optional[float] = Field(default=None)
+    risk_threshold: Optional[float] = Field(default=0.5)
 
     @field_validator("ticker")
     @classmethod
     def normalize_ticker_format(cls, value: Optional[str]) -> Optional[str]:
         if not value:
             return value
-            
         clean_value = value.upper().strip()
         
-        # Automatically normalize forex/crypto slashes to Yahoo Finance dashes
-        if "/" in clean_value:
-            clean_value = clean_value.replace("/", "-")
+        # FACT: Alpaca requires the slash for crypto. DO NOT USE DASHES HERE.
+        if "-" in clean_value:
+            clean_value = clean_value.replace("-", "/")
             
-        # Catch plain crypto bases if the LLM gets lazy
         crypto_bases = {"BTC", "ETH", "SOL", "DOGE", "ADA", "XRP"}
         if clean_value in crypto_bases:
-            clean_value = f"{clean_value}-USD"
+            clean_value = f"{clean_value}/USD"
             
         return clean_value
+
+    @field_validator("asset_class", mode="before")
+    @classmethod
+    def normalize_asset_class(cls, value: Optional[str]) -> str:
+        if not value:
+            return "equity"
+        clean_val = value.lower().strip()
+        return clean_val if clean_val in ["crypto", "equity"] else "unknown"

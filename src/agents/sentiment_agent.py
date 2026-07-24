@@ -15,6 +15,7 @@ async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
         return {}
 
     ticker = state.get("current_ticker", "")
+    asset_class = state.get("asset_class", "equity")
     if ticker == "UNKNOWN" or not ticker:
         return {"errors": ["Sentiment Agent: Could not resolve a valid ticker symbol from the state."]}
 
@@ -25,9 +26,15 @@ async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
         async with stdio_client(server_params) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
-                result = await session.call_tool("analyze_market_sentiment", arguments={"ticker": ticker})
+                result = await session.call_tool("analyze_market_sentiment", arguments={"ticker": ticker, "asset_class": asset_class})
                 
-                text_content = result.content[0].text if isinstance(result.content, list) else result.content
+                if getattr(result, "isError", False):
+                    return {"errors": [f"MCP Server Internal Error: {result.content}"]}
+                
+                if isinstance(result.content, list):
+                    text_content = result.content[0].text if len(result.content) > 0 else "{}"
+                else:
+                    text_content = result.content
                 try:
                     parsed_result = json.loads(text_content)
                     return {"sentiment_data": {ticker: parsed_result}}

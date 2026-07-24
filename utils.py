@@ -3,7 +3,6 @@ import requests
 import numpy as np
 
 def get_live_asset_data(ticker: str):
-    # Defense-in-depth: Catch the slash here because your Pydantic layer is leaking
     clean_ticker = ticker.upper().strip().replace("/", "-")
     
     crypto_bases = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP"]
@@ -11,26 +10,29 @@ def get_live_asset_data(ticker: str):
         clean_ticker = f"{clean_ticker}-USD"
 
     try:
-        vanilla_session = requests.Session()
-        stock = yf.Ticker(clean_ticker, session=vanilla_session)
-        # Fetch 1 month of historical daily data for the chart
+        clean_session = requests.Session()
+        clean_session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        stock = yf.Ticker(clean_ticker, session=clean_session)
         hist = stock.history(period="1mo", interval="1d")
         
         if hist.empty:
             print(f"ERROR: Yahoo Finance returned empty data for ticker: {clean_ticker}")
             return None
             
-        current_price = float(hist['Close'].iloc[-1])
-        prev_price = float(hist['Close'].iloc[-2]) if len(hist) > 1 else float(hist['Open'].iloc[0])
+        # FIX: Normalize DataFrame column cases so Recharts doesn't crash
+        hist.columns = [c.lower() for c in hist.columns]
+            
+        current_price = float(hist['close'].iloc[-1])
+        prev_price = float(hist['close'].iloc[-2]) if len(hist) > 1 else float(hist['open'].iloc[0])
         change = current_price - prev_price
         change_pct = (change / prev_price) * 100
         
-        # Calculate roughly 30-day volatility
-        returns = hist['Close'].pct_change().dropna()
+        returns = hist['close'].pct_change().dropna()
         volatility = float(returns.std() * np.sqrt(252) * 100)
         
-        # Format exact datapoints for Recharts
-        chart_data = [{"date": str(d.date()), "price": round(float(p), 2)} for d, p in zip(hist.index, hist['Close'])]
+        chart_data = [{"date": str(d.date()), "price": round(float(p), 2)} for d, p in zip(hist.index, hist['close'])]
         
         return {
             "ticker": clean_ticker,

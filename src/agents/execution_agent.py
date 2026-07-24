@@ -15,20 +15,36 @@ def execution_agent_node(state):
     allocation = trade.get("allocation", 0.0)
     live_price = trade.get("estimated_price", 0.0)
     
-    if action == "HOLD" or allocation <= 0 or live_price <= 0:
+    if action in ["HOLD", "REJECT"] or live_price <= 0:
         return {"messages": ["Execution Engine: No action taken. Holding position."]}
-        
+
+    # GUARD: Alpaca does not support non-US regional symbols (e.g. .NS, .BO)
+    if "." in ticker:
+        return {
+            "messages": [f"Execution Engine: Skipping Alpaca submission for regional stock '{ticker}'. Alpaca only supports US equities and selected cryptos."]
+        }
+
     cash_available = get_available_cash()
-    # Natively calculate fractional shares (round to 4 decimal places for fractional support)
-    shares = round((cash_available * allocation) / live_price, 4)
+
+    # FIX: Use explicit share count if defined by user/LLM; otherwise derive from allocation
+    proposed_shares = float(trade.get("shares", 0.0))
+    if proposed_shares > 0.0:
+        shares = proposed_shares
+    elif action == "BUY" and allocation > 0:
+        shares = round((cash_available * allocation) / live_price, 4)
+    elif action == "SELL":
+        # For SELL orders without explicit shares, require explicit share count or handle broker position sizing
+        return {"messages": ["Execution Engine: Sell order requires explicit share quantity."]}
+    else:
+        return {"messages": ["Execution Engine: No shares or allocation specified. Action cancelled."]}
+
     trade["shares"] = shares
     
     is_paper = state.get("paper_trading_enabled", True)
-    asset_class = state.get("asset_class", "equity") # Pull the class from the state
+    asset_class = state.get("asset_class", "equity")
     
     client = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=is_paper)
     
-    # Dynamic TimeInForce based on asset class
     tif = TimeInForce.GTC if asset_class == "crypto" else TimeInForce.DAY
     
     order_data = MarketOrderRequest(
@@ -39,7 +55,6 @@ def execution_agent_node(state):
     )
     
     try:
-        # Fire the actual API request to the broker
         order = client.submit_order(order_data)
         mode = "PAPER" if is_paper else "LIVE"
         return {
@@ -47,5 +62,4 @@ def execution_agent_node(state):
             "messages": [f"Order executed ({mode}): {action} {shares} shares of {ticker}. Alpaca Order ID: {order.id}"]
         }
     except Exception as e:
-        # Catch broker errors (e.g., insufficient buying power, invalid ticker)
         return {"errors": [f"Alpaca API Error: {str(e)}"]}

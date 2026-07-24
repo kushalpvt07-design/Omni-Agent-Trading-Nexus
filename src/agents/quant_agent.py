@@ -30,7 +30,13 @@ async def quant_agent_node(state: FinancialSwarmState) -> dict:
                 await session.initialize()
                 result = await session.call_tool("get_daily_close_price", arguments={"ticker": ticker, "asset_class": asset_class})
                 
-                text_content = result.content[0].text if isinstance(result.content, list) else result.content
+                if getattr(result, "isError", False):
+                    return {"errors": [f"MCP Server Internal Error: {result.content}"]}
+                
+                if isinstance(result.content, list):
+                    text_content = result.content[0].text if len(result.content) > 0 else "{}"
+                else:
+                    text_content = result.content
                 # UPDATE: Pass current_ticker out to the state graph
                 return {
                     "quant_data": {ticker: text_content},

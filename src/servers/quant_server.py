@@ -1,6 +1,7 @@
 import json
 import os
 import math
+import yfinance as yf
 from mcp.server.fastmcp import FastMCP
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
@@ -18,42 +19,55 @@ mcp = FastMCP("QuantServer")
 def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
     ticker_upper = ticker.upper().strip()
     
-    if not ticker_upper or len(ticker_upper) > 10:
-        return json.dumps({"status": "error", "message": "Invalid ticker symbol format."})
+    if not ticker_upper or len(ticker_upper) > 20:
+        return json.dumps({"status": "error", "message": "Invalid ticker symbol format. Must be 1-20 characters."})
     
     try:
-        start_date = datetime.now() - timedelta(days=45) # Fetch enough data for 30 trading days
+        start_date = datetime.now() - timedelta(days=45) 
         
-        if asset_class == "crypto":
-            # Alpaca DEMANDS the slash for crypto. Force it here.
-            alpaca_ticker = ticker_upper.replace("-", "/")
-            client = CryptoHistoricalDataClient(api_key, secret_key)
-            request_params = CryptoBarsRequest(
-                symbol_or_symbols=[alpaca_ticker],
-                timeframe=TimeFrame.Day,
-                start=start_date
-            )
-            bars = client.get_crypto_bars(request_params).df
-        else:
-            client = StockHistoricalDataClient(api_key, secret_key)
-            request_params = StockBarsRequest(
-                symbol_or_symbols=[ticker_upper],
-                timeframe=TimeFrame.Day,
-                start=start_date
-            )
-            bars = client.get_stock_bars(request_params).df
+        # FIXED: Fallback to Yahoo Finance for regional tickers (containing a period)
+        if "." in ticker_upper:
+            stock = yf.Ticker(ticker_upper)
+            bars = stock.history(period="45d")
             
-        if bars.empty:
-            return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}."})
+            if bars.empty:
+                return json.dumps({"status": "error", "message": f"No data found for {ticker_upper} on Yahoo Finance."})
+                
+            bars.columns = [c.lower() for c in bars.columns]
+            closes = bars['close'].tail(30)
+            std_dev = float(closes.std()) if len(closes) > 1 else 0.0
+            sma = float(closes.mean())
+            latest_close = float(closes.iloc[-1])
+            latest_volume = int(bars['volume'].iloc[-1])
+            
+        else:
+            if asset_class == "crypto":
+                alpaca_ticker = ticker_upper.replace("-", "/")
+                client = CryptoHistoricalDataClient(api_key, secret_key)
+                request_params = CryptoBarsRequest(
+                    symbol_or_symbols=[alpaca_ticker],
+                    timeframe=TimeFrame.Day,
+                    start=start_date
+                )
+                bars = client.get_crypto_bars(request_params).df
+            else:
+                client = StockHistoricalDataClient(api_key, secret_key)
+                request_params = StockBarsRequest(
+                    symbol_or_symbols=[ticker_upper],
+                    timeframe=TimeFrame.Day,
+                    start=start_date
+                )
+                bars = client.get_stock_bars(request_params).df
+                
+            if bars.empty:
+                return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}."})
 
-        # Calculate 30-day volatility and SMA
-        closes = bars['close'].tail(30)
-        std_dev = float(closes.std()) if len(closes) > 1 else 0.0
-        sma = float(closes.mean())
-        latest_close = float(closes.iloc[-1])
-        latest_volume = int(bars['volume'].iloc[-1])
+            closes = bars['close'].tail(30)
+            std_dev = float(closes.std()) if len(closes) > 1 else 0.0
+            sma = float(closes.mean())
+            latest_close = float(closes.iloc[-1])
+            latest_volume = int(bars['volume'].iloc[-1])
         
-        # Mathematical Sanity Check (Data Validation Layer)
         if sma > 0 and abs(latest_close - sma) / sma > 0.5:
             return json.dumps({
                 "status": "error", 
@@ -61,11 +75,20 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             })
 
         history_data = []
+        # FIXED: Safely handle both Alpaca MultiIndex and yfinance DatetimeIndex
         for idx, row in bars.tail(5).iterrows():
+            if isinstance(idx, tuple): 
+                date_str = idx[1].strftime("%Y-%m-%d")
+            else:
+                date_str = idx.strftime("%Y-%m-%d")
+                
+            close_val = row.get("close") if "close" in row else row.get("Close")
+            vol_val = row.get("volume") if "volume" in row else row.get("Volume")
+            
             history_data.append({
-                "date": idx[1].strftime("%Y-%m-%d"),
-                "close": round(row["close"], 2),
-                "volume": int(row["volume"])
+                "date": date_str,
+                "close": round(float(close_val), 2),
+                "volume": int(vol_val)
             })
             
         history_data.reverse()

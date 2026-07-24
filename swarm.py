@@ -19,16 +19,15 @@ def route_after_pre_flight(state: FinancialSwarmState):
 
 def route_after_orchestrator(state: FinancialSwarmState):
     proposed_trade = state.get("proposed_trade", {})
-    action = proposed_trade.get("action", "")
-    allocation = proposed_trade.get("allocation", 0.0)
-    shares = proposed_trade.get("shares", 0.0)
+    action = proposed_trade.get("action", "HOLD")
+    allocation = float(proposed_trade.get("allocation", 0.0))
+    shares = float(proposed_trade.get("shares", 0.0))
     
-    # If the orchestrator rejected the trade, or if shares are zeroed, kill the pipeline.
-    if action == "REJECT" or state.get("shares", 0.0) <= 0.0:
-        print("[SYSTEM]: Trade rejected by Orchestrator. Aborting pipeline.")
+    # FIX: Safely check proposed_trade, allow HOLD to abort properly, and check BOTH sizing metrics
+    if action in ["REJECT", "HOLD"] or (shares <= 0.0 and allocation <= 0.0):
+        print(f"[SYSTEM]: Trade routed to END (Action: {action}, Shares: {shares}, Alloc: {allocation}).")
         return END
     
-    # Otherwise, proceed to risk management
     return "risk_agent"
 
 def build_graph():
@@ -43,13 +42,10 @@ def build_graph():
     
     workflow.add_edge(START, "parser_node")
     workflow.add_conditional_edges("parser_node", route_after_parser, {END: END, "pre_flight_risk": "pre_flight_risk"})
-    
     workflow.add_conditional_edges("pre_flight_risk", route_after_pre_flight)
-    
     workflow.add_edge(["quant_agent", "sentiment_agent"], "orchestrator")
     workflow.add_conditional_edges("orchestrator", route_after_orchestrator, {END: END, "risk_agent": "risk_agent"})
     workflow.add_edge("risk_agent", "execution_agent")
     workflow.add_edge("execution_agent", END)
     
-    # DO NOT compile it here. Return the uncompiled blueprint.
     return workflow

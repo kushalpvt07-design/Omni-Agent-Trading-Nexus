@@ -32,6 +32,9 @@ async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_conte
     ])
 
 async def orchestrator_node(state: FinancialSwarmState) -> dict:
+    if state.get("errors"):
+        return {"messages": [AIMessage(content="🚨 Orchestrator skipped due to upstream errors.")]}
+        
     user_request = "No request."
     for msg in reversed(state.get("messages", [])):
         if isinstance(msg, HumanMessage):
@@ -44,11 +47,16 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     
     requested_action = state.get("requested_action", "BUY")
     requested_quantity = state.get("requested_quantity")
+    
+    # FIXED: Provide a default 10% allocation if none is requested so Risk Desk evaluates properly
+    raw_alloc = state.get("requested_allocation")
+    requested_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
 
+    # FIXED: Only valid models
     models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-1.5-flash"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
@@ -83,18 +91,20 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     try:
         decision: OrchestratorDirective = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
-        # FIX: Honor the LLM's rejection over the user's initial request
         if decision.action == "REJECT" or decision.shares == 0.0:
             final_action = "REJECT"
             final_shares = 0.0
+            final_allocation = 0.0
         else:
             final_action = requested_action if requested_action else decision.action
             final_shares = float(requested_quantity) if requested_quantity is not None else decision.shares
+            final_allocation = requested_allocation
 
+        # FIXED: Pass final_allocation instead of hardcoding 0.0
         proposed_trade = {
             "ticker": active_ticker,
             "action": final_action,
-            "allocation": 0.0,
+            "allocation": final_allocation,
             "shares": final_shares,
             "estimated_price": 0.0,
             "reasoning": decision.reasoning
