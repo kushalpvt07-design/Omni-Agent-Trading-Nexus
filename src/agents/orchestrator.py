@@ -1,25 +1,15 @@
 import os
-from pydantic import BaseModel, Field, model_validator
+import asyncio
+from pydantic import BaseModel, Field
 from typing import Literal
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from src.state import FinancialSwarmState
 from tenacity import retry, stop_after_attempt, wait_exponential
-import google.api_core.exceptions
 
 class OrchestratorDirective(BaseModel):
     action: Literal["BUY", "SELL", "HOLD", "REJECT"] = Field(...)
-    shares: float = Field(..., description="Number of shares. MUST be 0.0 if Action is REJECT.")
     reasoning: str
-
-    @model_validator(mode='after')
-    def enforce_consistency(self):
-        if self.action == "REJECT" and self.shares > 0:
-            self.shares = 0.0
-        elif self.shares <= 0.0 and self.action != "HOLD":
-            self.action = "REJECT"
-            self.shares = 0.0
-        return self
 
 @retry(
     stop=stop_after_attempt(7),
@@ -45,18 +35,24 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     raw_quant = state.get("quant_data", {}).get(active_ticker, "No data available.")
     raw_sentiment = state.get("sentiment_data", {}).get(active_ticker, "No data available.")
     
-    requested_action = state.get("requested_action", "BUY")
     requested_quantity = state.get("requested_quantity")
-    
-    # FIXED: Provide a default 10% allocation if none is requested so Risk Desk evaluates properly
     raw_alloc = state.get("requested_allocation")
-    requested_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
+    
+    # FLAW 4 FIX: Safe float casting to prevent ValueError crash
+    try:
+        requested_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
+    except ValueError:
+        requested_allocation = 0.1
 
-    # FIXED: Only valid models
+    # FLAW 5 FIX: Removed the hallucinated "antigravity" model 
     models_to_try = [
+        "gemini-3.5-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
-        "gemini-1.5-flash"
+        "gemini-3.1-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro"
     ]
     
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
@@ -66,14 +62,13 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(OrchestratorDirective)
         for m in models_to_try[1:]
     ]
-    
     structured_llm = structured_llm.with_fallbacks(fallbacks)
 
     system_prompt = (
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment to make a final trading decision. "
-        "CRITICAL RULE: If the quantitative data is missing, corrupted, or shows 0 volume, you MUST output action='REJECT' and shares=0.0. "
-        "Under NO circumstances should you output a 'BUY' or 'SELL' action if valid market data is missing."
+        "CRITICAL RULE: If the quantitative data is missing, corrupted, or shows 0 volume, you MUST output action='REJECT'. "
+        "Your decision overrides the user's initial request. If the data looks bad, you must REJECT or HOLD."
     )
     
     analysis_context = (
@@ -84,23 +79,21 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     )
 
     print("\nGemini Orchestrator is analyzing the swarm data...")
-    import asyncio
     print("[SYSTEM STATUS]: Pacing API to avoid rate limit death. Breathing for 3 seconds...")
     await asyncio.sleep(3)
 
     try:
         decision: OrchestratorDirective = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
         
-        if decision.action == "REJECT" or decision.shares == 0.0:
+        if decision.action == "REJECT":
             final_action = "REJECT"
             final_shares = 0.0
             final_allocation = 0.0
         else:
-            final_action = requested_action if requested_action else decision.action
-            final_shares = float(requested_quantity) if requested_quantity is not None else decision.shares
+            final_action = decision.action
+            final_shares = float(requested_quantity) if requested_quantity is not None else 0.0
             final_allocation = requested_allocation
 
-        # FIXED: Pass final_allocation instead of hardcoding 0.0
         proposed_trade = {
             "ticker": active_ticker,
             "action": final_action,
@@ -110,7 +103,7 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
             "reasoning": decision.reasoning
         }
         
-        report_qty = f"{final_shares} Shares" if final_shares > 0 else ""
+        report_qty = f"{final_shares} Shares" if final_shares > 0 else f"{final_allocation*100:.1f}% Allocation"
         
         final_report = (
             f"**AI Swarm Analysis Complete for {active_ticker}**\n\n"

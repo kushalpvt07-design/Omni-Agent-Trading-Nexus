@@ -5,39 +5,41 @@ from src.state import FinancialSwarmState
 
 LEDGER_FILE = "portfolio_ledger.json"
 
-def get_available_cash():
-    """Reads the ledger to see how much money you haven't lost yet."""
+def get_ledger_data():
+    """Reads the ledger to fetch cash and current portfolio positions."""
     if not os.path.exists(LEDGER_FILE):
-        return 100000.0 # Default starting cash
+        return {"cash": 100000.0, "positions": {}}
     try:
         with open(LEDGER_FILE, "r") as f:
-            return json.load(f).get("cash", 100000.0)
+            data = json.load(f)
+            return {
+                "cash": data.get("cash", 100000.0),
+                "positions": data.get("positions", {})
+            }
     except Exception:
-        return 0.0 # If the file is locked or corrupted, assume zero cash to freeze trading
+        return {"cash": 0.0, "positions": {}}
+
+def get_available_cash():
+    return get_ledger_data()["cash"]
 
 async def pre_flight_risk_node(state: FinancialSwarmState) -> dict:
-    """Short-circuits the pipeline if portfolio cash is insufficient."""
     cash_available = get_available_cash()
     if cash_available < 100.0:
         return {"errors": ["PRE_FLIGHT_REJECTION: Insufficient funds in ledger to execute any trade. Aborting pipeline."]}
     return {}
 
 async def risk_agent_node(state: FinancialSwarmState) -> dict:
-    """
-    The Risk Desk. Intercepts the Orchestrator's proposal and runs compliance checks.
-    If the trade violates risk parameters, it forcefully overrides the state.
-    """
     trade = state.get("proposed_trade", {})
     action = trade.get("action", "HOLD")
-    allocation = trade.get("allocation", 0.0)
-    # CRITICAL: Use the verified state ticker, NOT the LLM's hallucinated ticker
-    ticker = state.get("current_ticker", "UNKNOWN") 
+    allocation_fallback = trade.get("allocation", 0.0)
+    shares = float(trade.get("shares", 0.0))
+    ticker = state.get("current_ticker", "UNKNOWN")
 
-    if action == "HOLD" or allocation <= 0:
-        return {"risk_approved": True, "messages": [AIMessage(content="🛡️ Risk Desk: Cleared.")]}
+    if action == "HOLD":
+        return {"risk_approved": True, "messages": [AIMessage(content="🛡️ Risk Desk: Cleared for HOLD.")]}
 
     quant_data = state.get("quant_data", {}).get(ticker, "")
-    live_price = 0.0 # Do not default to 150.0 like an amateur
+    live_price = 0.0
     std_dev = 0.0
     
     if quant_data:
@@ -54,46 +56,73 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
             "errors": [f"FATAL: Risk Desk could not resolve live price for {ticker}. Aborting."]
         }
             
-    cash_available = get_available_cash()
-    requested_trade_value = cash_available * allocation
+    ledger = get_ledger_data()
+    cash_available = ledger["cash"]
+    positions = ledger["positions"]
 
-    # Dynamic Position Sizing based on volatility
+    # THE FIX: Block naked sells if we don't own the asset in the ledger
+    if action == "SELL":
+        owned_shares = float(positions.get(ticker, 0.0))
+        if owned_shares <= 0.0:
+            reject_msg = f"⛔ RISK DESK REJECTION: Attempted to SELL {ticker}, but ledger shows 0 shares owned. Naked shorting is prohibited. Overriding to HOLD."
+            overridden_trade = {**trade, "action": "HOLD", "allocation": 0.0, "shares": 0.0, "estimated_price": live_price, "reasoning": f"[RISK REJECTION: Naked shorting prohibited] {trade.get('reasoning', '')}"}
+            return {"risk_approved": False, "proposed_trade": overridden_trade, "messages": [AIMessage(content=reject_msg)]}
+        
+        if shares > owned_shares:
+            reject_msg = f"⛔ RISK DESK REJECTION: Attempted to SELL {shares} of {ticker}, but ledger only shows {owned_shares} shares owned. Overriding to HOLD."
+            overridden_trade = {**trade, "action": "HOLD", "allocation": 0.0, "shares": 0.0, "estimated_price": live_price, "reasoning": f"[RISK REJECTION: Insufficient shares for sell order] {trade.get('reasoning', '')}"}
+            return {"risk_approved": False, "proposed_trade": overridden_trade, "messages": [AIMessage(content=reject_msg)]}
+        
+        # Valid SELL backed by inventory
+        actual_allocation = allocation_fallback 
+        requested_trade_value = (shares if shares > 0 else owned_shares) * live_price
+        approve_msg = f"✅ RISK DESK APPROVAL: Valid SELL order for {ticker}. Inventory verified. Routing to Human Checkpoint."
+        updated_trade = trade.copy()
+        updated_trade["estimated_price"] = live_price
+        updated_trade["shares"] = shares if shares > 0 else owned_shares
+        
+        return {"risk_approved": True, "proposed_trade": updated_trade, "messages": [AIMessage(content=approve_msg)]}
+
+    # BUY LOGIC
+    if shares > 0:
+        requested_trade_value = shares * live_price
+        actual_allocation = requested_trade_value / cash_available if cash_available > 0 else 1.0
+    else:
+        actual_allocation = allocation_fallback
+        requested_trade_value = cash_available * actual_allocation
+
     volatility_pct = (std_dev / live_price) if live_price > 0 else 0
-    # Base allocation 30%, reduce aggressively for high volatility, minimum 5%
     allocation_pct = max(0.05, 0.30 - (volatility_pct * 2.0))
     max_allowed_spend = cash_available * allocation_pct
 
-    print(f"\n[Risk Desk] analyzing {action} order for {allocation*100:.1f}% allocation of {ticker} (Requested: ${requested_trade_value:,.2f} | Max allowed: ${max_allowed_spend:,.2f})...")
+    print(f"\n[Risk Desk] analyzing {action} order for {actual_allocation*100:.1f}% true allocation of {ticker} (Requested: ${requested_trade_value:,.2f} | Max allowed: ${max_allowed_spend:,.2f})...")
 
-    if action == "BUY" and allocation > allocation_pct:
+    if action == "BUY" and actual_allocation > allocation_pct:
         reject_msg = (
-            f"⛔ RISK DESK REJECTION: Requested allocation ({allocation*100:.1f}%) exceeds the dynamically adjusted "
-            f"maximum limit ({allocation_pct*100:.1f}%). Overriding to HOLD."
+            f"⛔ RISK DESK REJECTION: Requested position size (${requested_trade_value:,.2f} / {actual_allocation*100:.1f}%) "
+            f"exceeds the dynamically adjusted volatility limit (${max_allowed_spend:,.2f} / {allocation_pct*100:.1f}%). Overriding to HOLD."
         )
-        
         original_reasoning = trade.get("reasoning", "No original reasoning provided.")
         
-        # Forcefully overwrite the Orchestrator's trade with a dead HOLD order
         overridden_trade = {
             "ticker": ticker,
             "action": "HOLD",
             "allocation": 0.0,
-            "shares": 0,
+            "shares": 0.0,
             "estimated_price": live_price,
             "reasoning": f"[RISK REJECTION: Exceeds dynamically adjusted cash limit] Original LLM Analysis: {original_reasoning}"
         }
-        
         return {
             "risk_approved": False, 
             "proposed_trade": overridden_trade, 
             "messages": [AIMessage(content=reject_msg)]
         }
 
-    approve_msg = f"✅ RISK DESK APPROVAL: Allocation ({allocation*100:.1f}%) is within compliance limits. Routing to Human Checkpoint."
+    approve_msg = f"✅ RISK DESK APPROVAL: Trade size (${requested_trade_value:,.2f}) is within compliance limits. Routing to Human Checkpoint."
 
-    # Update trade with live price so execution agent doesn't have to pull it again
     updated_trade = trade.copy()
     updated_trade["estimated_price"] = live_price
+    updated_trade["allocation"] = actual_allocation 
 
     return {
         "risk_approved": True, 
