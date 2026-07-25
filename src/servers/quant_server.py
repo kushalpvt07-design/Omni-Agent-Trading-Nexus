@@ -1,6 +1,7 @@
 import json
 import os
 import math
+import pandas as pd
 import yfinance as yf
 from mcp.server.fastmcp import FastMCP
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
@@ -25,7 +26,6 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
     try:
         start_date = datetime.now() - timedelta(days=45) 
         
-        # FIXED: Fallback to Yahoo Finance for regional tickers (containing a period)
         if "." in ticker_upper:
             stock = yf.Ticker(ticker_upper)
             bars = stock.history(period="45d")
@@ -38,7 +38,8 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             std_dev = float(closes.std()) if len(closes) > 1 else 0.0
             sma = float(closes.mean())
             latest_close = float(closes.iloc[-1])
-            latest_volume = int(bars['volume'].iloc[-1])
+            raw_vol = bars['volume'].iloc[-1]
+            latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
             
         else:
             if asset_class == "crypto":
@@ -66,7 +67,8 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             std_dev = float(closes.std()) if len(closes) > 1 else 0.0
             sma = float(closes.mean())
             latest_close = float(closes.iloc[-1])
-            latest_volume = int(bars['volume'].iloc[-1])
+            raw_vol = bars['volume'].iloc[-1]
+            latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
         
         if sma > 0 and abs(latest_close - sma) / sma > 0.5:
             return json.dumps({
@@ -75,20 +77,18 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             })
 
         history_data = []
-        # FIXED: Safely handle both Alpaca MultiIndex and yfinance DatetimeIndex
         for idx, row in bars.tail(5).iterrows():
-            if isinstance(idx, tuple): 
-                date_str = idx[1].strftime("%Y-%m-%d")
-            else:
-                date_str = idx.strftime("%Y-%m-%d")
+            ts = idx[1] if isinstance(idx, tuple) else idx
+            date_str = pd.to_datetime(ts).strftime("%Y-%m-%d")
                 
             close_val = row.get("close") if "close" in row else row.get("Close")
             vol_val = row.get("volume") if "volume" in row else row.get("Volume")
+            vol_clean = int(vol_val) if vol_val is not None and not math.isnan(float(vol_val)) else 0
             
             history_data.append({
                 "date": date_str,
                 "close": round(float(close_val), 2),
-                "volume": int(vol_val)
+                "volume": vol_clean
             })
             
         history_data.reverse()

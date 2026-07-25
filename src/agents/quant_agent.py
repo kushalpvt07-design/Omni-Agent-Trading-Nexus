@@ -37,10 +37,9 @@ async def quant_agent_node(state: FinancialSwarmState) -> dict:
                     text_content = result.content[0].text if len(result.content) > 0 else "{}"
                 else:
                     text_content = result.content
-                # UPDATE: Pass current_ticker out to the state graph
+                # FIX: Do NOT return 'current_ticker' to prevent LangGraph parallel write conflict
                 return {
-                    "quant_data": {ticker: text_content},
-                    "current_ticker": ticker
+                    "quant_data": {ticker: text_content}
                 }
     except Exception as e:
         return {"errors": [f"Quant Server Error: {str(e)}"]}

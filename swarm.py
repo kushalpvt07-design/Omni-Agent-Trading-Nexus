@@ -18,12 +18,23 @@ def route_after_pre_flight(state: FinancialSwarmState):
     return ["quant_agent", "sentiment_agent"]
 
 def route_after_orchestrator(state: FinancialSwarmState):
-    proposed_trade = state.get("proposed_trade", {})
+    proposed_trade = state.get("proposed_trade") or {}
     action = proposed_trade.get("action", "HOLD")
-    allocation = float(proposed_trade.get("allocation", 0.0))
-    shares = float(proposed_trade.get("shares", 0.0))
     
-    # FIX: Safely check proposed_trade, allow HOLD to abort properly, and check BOTH sizing metrics
+    raw_alloc = proposed_trade.get("allocation")
+    raw_shares = proposed_trade.get("shares")
+    
+    # FIX: Absolute protection against LLM null schema returns to prevent TypeError implosions
+    try: 
+        allocation = float(raw_alloc) if raw_alloc is not None else 0.0
+    except (ValueError, TypeError): 
+        allocation = 0.0
+        
+    try: 
+        shares = float(raw_shares) if raw_shares is not None else 0.0
+    except (ValueError, TypeError): 
+        shares = 0.0
+    
     if action in ["REJECT", "HOLD"] or (shares <= 0.0 and allocation <= 0.0):
         print(f"[SYSTEM]: Trade routed to END (Action: {action}, Shares: {shares}, Alloc: {allocation}).")
         return END
@@ -42,7 +53,11 @@ def build_graph():
     
     workflow.add_edge(START, "parser_node")
     workflow.add_conditional_edges("parser_node", route_after_parser, {END: END, "pre_flight_risk": "pre_flight_risk"})
-    workflow.add_conditional_edges("pre_flight_risk", route_after_pre_flight)
+    workflow.add_conditional_edges(
+        "pre_flight_risk", 
+        route_after_pre_flight, 
+        {END: END, "quant_agent": "quant_agent", "sentiment_agent": "sentiment_agent"}
+    )
     workflow.add_edge(["quant_agent", "sentiment_agent"], "orchestrator")
     workflow.add_conditional_edges("orchestrator", route_after_orchestrator, {END: END, "risk_agent": "risk_agent"})
     workflow.add_edge("risk_agent", "execution_agent")

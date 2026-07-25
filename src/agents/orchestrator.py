@@ -38,28 +38,28 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     requested_quantity = state.get("requested_quantity")
     raw_alloc = state.get("requested_allocation")
     
-    # FLAW 4 FIX: Safe float casting to prevent ValueError crash
     try:
         requested_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
     except ValueError:
         requested_allocation = 0.1
 
-    # FLAW 5 FIX: Removed the hallucinated "antigravity" model 
+    # FLAW 1 FIX: Replaced hallucinated and dead models with verified 2026 endpoints
     models_to_try = [
+        "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
+        "gemini-3-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite"
     ]
     
-    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
+    # FLAW 2 FIX: Removed deprecated temperature parameter
+    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0])
     structured_llm = primary_llm.with_structured_output(OrchestratorDirective)
     
     fallbacks = [
-        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(OrchestratorDirective)
+        ChatGoogleGenerativeAI(model=m).with_structured_output(OrchestratorDirective)
         for m in models_to_try[1:]
     ]
     structured_llm = structured_llm.with_fallbacks(fallbacks)

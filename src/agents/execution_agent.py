@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from src.agents.risk_agent import get_available_cash
+from src.agents.risk_agent import get_available_cash, get_ledger_data
 
 def execution_agent_node(state):
     if not state.get("risk_approved", False):
@@ -24,15 +24,23 @@ def execution_agent_node(state):
             "messages": [AIMessage(content=f"Execution Engine: Skipping Alpaca submission for regional stock '{ticker}'.")]
         }
 
-    cash_available = get_available_cash()
-    proposed_shares = float(trade.get("shares", 0.0))
+    ledger_data = get_ledger_data()
+    cash_available = ledger_data["cash"]
+    owned_shares = float(ledger_data["positions"].get(ticker, 0.0))
+
+    # SAFE TYPE CAST FIX
+    raw_shares = trade.get("shares")
+    proposed_shares = float(raw_shares) if raw_shares is not None else 0.0
     
     if proposed_shares > 0.0:
         shares = proposed_shares
     elif action == "BUY" and allocation > 0:
         shares = round((cash_available * allocation) / live_price, 4)
     elif action == "SELL":
-        return {"messages": [AIMessage(content="Execution Engine: Sell order requires explicit share quantity.")]}
+        if owned_shares > 0 and allocation > 0:
+            shares = round(owned_shares * allocation, 4)
+        else:
+            return {"messages": [AIMessage(content="Execution Engine: Sell order requires explicit share quantity or valid portfolio inventory.")]}
     else:
         return {"messages": [AIMessage(content="Execution Engine: No shares or allocation specified. Action cancelled.")]}
 
@@ -85,7 +93,8 @@ def execution_agent_node(state):
         elif action == "SELL":
             ledger["cash"] += trade_value
             ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) - shares
-            if ledger["positions"][ticker] <= 0:
+            # ROUNDING RESIDUAL FIX
+            if round(ledger["positions"][ticker], 4) <= 0:
                 del ledger["positions"][ticker]
                 
         with open(ledger_path, "w") as f:

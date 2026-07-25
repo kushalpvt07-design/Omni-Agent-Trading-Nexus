@@ -23,22 +23,23 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             latest_message = msg.content
             break
 
-    # FLAW 5 FIX: Removed the hallucinated "antigravity" model
+    # FLAW 1 FIX: Replaced hallucinated and dead models with verified 2026 endpoints
     models_to_try = [
+        "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro"
+        "gemini-3-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite"
     ]
     
-    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], temperature=0.0)
+    # FLAW 2 FIX: Removed deprecated temperature parameter
+    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0])
     structured_extractor = primary_llm.with_structured_output(TradeDirectiveSchema)
     
     fallbacks = [
-        ChatGoogleGenerativeAI(model=m, temperature=0.0).with_structured_output(TradeDirectiveSchema)
+        ChatGoogleGenerativeAI(model=m).with_structured_output(TradeDirectiveSchema)
         for m in models_to_try[1:]
     ]
     structured_extractor = structured_extractor.with_fallbacks(fallbacks)

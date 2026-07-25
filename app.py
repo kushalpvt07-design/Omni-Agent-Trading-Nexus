@@ -25,13 +25,25 @@ if st.button("Deploy Swarm"):
                     if data.get("status") == "ERROR":
                         st.error(f"🚨 CRITICAL SYSTEM FAILURE: {data.get('error_message', 'Unknown Error')}")
                     else:
-                        st.success("Swarm Consensus Reached")
+                        action = data.get("action", "HOLD")
+                        
+                        if action in ["BUY", "SELL"]:
+                            st.success(f"Swarm Consensus Reached: {action} Proposed")
+                        else:
+                            st.warning(f"Swarm Consensus Reached: Position set to {action}")
                         
                         col1, col2, col3 = st.columns(3)
-                        # SAFE EXTRACTION: Prevent KeyErrors if backend drops fields
                         col1.metric("Target Asset", data.get("ticker", "N/A"))
-                        col2.metric("Swarm Signal", data.get("action", "HOLD"))
-                        col3.metric("Order Size", f"{int(data.get('shares', 0))} Shares" if data.get('shares', 0) % 1 == 0 else f"{data.get('shares', 0):.4f} Shares")
+                        col2.metric("Swarm Signal", action)
+                        
+                        # FIX: Bulletproof frontend string/null coercion
+                        raw_shares = data.get("shares")
+                        try:
+                            shares_val = float(raw_shares) if raw_shares is not None else 0.0
+                        except (ValueError, TypeError):
+                            shares_val = 0.0
+                            
+                        col3.metric("Order Size", f"{int(shares_val)} Shares" if shares_val % 1 == 0 else f"{shares_val:.4f} Shares")
                         
                         reasoning = data.get("orchestrator_reasoning", "No detailed reasoning provided by the swarm.")
                         st.info(f"**Orchestrator Reasoning:** {reasoning}")
