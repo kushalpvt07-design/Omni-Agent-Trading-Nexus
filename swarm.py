@@ -18,13 +18,17 @@ def route_after_pre_flight(state: FinancialSwarmState):
     return ["quant_agent", "sentiment_agent"]
 
 def route_after_orchestrator(state: FinancialSwarmState):
-    proposed_trade = state.get("proposed_trade") or {}
+    proposed_trade = state.get("proposed_trade")
+    
+    # FIX: Iron-clad type guard against LLM outputting strings or lists instead of expected dicts
+    if not isinstance(proposed_trade, dict):
+        proposed_trade = {}
+        
     action = proposed_trade.get("action", "HOLD")
     
     raw_alloc = proposed_trade.get("allocation")
     raw_shares = proposed_trade.get("shares")
     
-    # FIX: Absolute protection against LLM null schema returns to prevent TypeError implosions
     try: 
         allocation = float(raw_alloc) if raw_alloc is not None else 0.0
     except (ValueError, TypeError): 

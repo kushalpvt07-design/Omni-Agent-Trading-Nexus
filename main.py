@@ -17,13 +17,16 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from fastapi.middleware.cors import CORSMiddleware
 from utils import get_live_asset_data
 
-# FIX: Establish a global checkpointer to completely eliminate SQLite deadlock scenarios
 global_checkpointer = None
+# FIX: Compile the stateless graph globally once to eliminate per-request latency.
+global_stateless_swarm = build_graph().compile()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global global_checkpointer
     async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
+        # FIX: Ensure SQL tables actually initialize on a fresh production deployment
+        await checkpointer.setup()
         global_checkpointer = checkpointer
         yield
 
@@ -52,7 +55,6 @@ def sanitize_raw_input(raw_text: str) -> str:
 @app.post("/api/v1/analyze", response_model=TradeResponse)
 async def analyze_trade(request: TradeRequest):
     try:
-        stateless_swarm = build_graph().compile()
         clean_directive = sanitize_raw_input(request.directive)
         
         initial_state = {
@@ -67,13 +69,12 @@ async def analyze_trade(request: TradeRequest):
             "errors": []
         }
         
-        # FIX: Removed dead 'config' parameter; stateless execution doesn't use threads
-        final_state = await stateless_swarm.ainvoke(initial_state)
+        # FIX: Utilize the global pre-compiled graph
+        final_state = await global_stateless_swarm.ainvoke(initial_state)
         
         if final_state.get("errors"):
             return TradeResponse(status="ERROR", error_message=" | ".join(final_state["errors"]))
             
-        # FIX: Bulletproof dictionary extraction against LLM 'null' schema hallucination outputs
         proposed_trade = final_state.get("proposed_trade")
         if not isinstance(proposed_trade, dict):
             proposed_trade = {}
@@ -101,7 +102,6 @@ async def analyze_trade(request: TradeRequest):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    # FIX: Use global checkpointer to prevent "database is locked" OperationalErrors 
     trading_swarm = build_graph().compile(
         checkpointer=global_checkpointer,
         interrupt_before=["execution_agent"]
@@ -138,7 +138,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 else:
                     await websocket.send_json({"type": "message", "role": "System Alert", "content": "Trade Rejected by User. Swarm halted."})
                     
-                    # FIX: Bulletproof extraction against LLM hallucinating strings or nulls to prevent wipeouts
                     current_trade = current_state.values.get("proposed_trade")
                     if not isinstance(current_trade, dict):
                         current_trade = {}
