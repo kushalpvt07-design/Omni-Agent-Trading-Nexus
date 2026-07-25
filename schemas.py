@@ -1,27 +1,30 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, Literal
 
 class TradeRequest(BaseModel):
     directive: str = Field(..., description="The user's trading command")
-    paper_trading: bool = Field(default=True, description="Safety flag")
+    paper_trading: bool = Field(default=True, description="Safety flag to prevent real money loss")
 
 class TradeResponse(BaseModel):
-    status: str
+    status: str = Field(..., description="Success or error status")
     ticker: Optional[str] = None
-    action: Optional[str] = None
-    shares: Optional[float] = 0.0
+    action: Optional[Literal["BUY", "SELL", "HOLD"]] = None
+    shares: Optional[float] = None  # Fixed: Default to None, not 0.0. 
     risk_approved: bool = False
     orchestrator_reasoning: Optional[str] = None
     error_message: Optional[str] = None
 
 class TradeDirectiveSchema(BaseModel):
+    # Enforce strict parsing for the LLM to prevent hallucinations
+    model_config = ConfigDict(strict=False, extra="forbid")
+
     is_valid_directive: bool = Field(description="Set to True ONLY if the user provides a specific ticker.")
     ticker: Optional[str] = Field(default=None, description="The financial asset ticker symbol.")
     asset_class: Literal["crypto", "equity", "unknown"] = Field(default="equity")
     rejection_reason: Optional[str] = Field(default=None)
     action: Literal["BUY", "SELL", "HOLD"] = Field(default="HOLD")
     quantity: Optional[float] = Field(default=None)
-    allocation_percentage: Optional[float] = Field(default=None)
+    allocation: Optional[float] = Field(default=None, description="Renamed from allocation_percentage to match state.py")
     risk_threshold: Optional[float] = Field(default=0.5)
 
     @field_validator("ticker")

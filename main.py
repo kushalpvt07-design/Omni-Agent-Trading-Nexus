@@ -18,14 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from utils import get_live_asset_data
 
 global_checkpointer = None
-# FIX: Compile the stateless graph globally once to eliminate per-request latency.
 global_stateless_swarm = build_graph().compile()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global global_checkpointer
     async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
-        # FIX: Ensure SQL tables actually initialize on a fresh production deployment
         await checkpointer.setup()
         global_checkpointer = checkpointer
         yield
@@ -69,7 +67,6 @@ async def analyze_trade(request: TradeRequest):
             "errors": []
         }
         
-        # FIX: Utilize the global pre-compiled graph
         final_state = await global_stateless_swarm.ainvoke(initial_state)
         
         if final_state.get("errors"):
@@ -224,14 +221,39 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "content": content
                             })
 
-                    if node_name == "parser_node":
-                        extracted_ticker = node_state.get("current_ticker") 
-                        if extracted_ticker:
+                        # FIX 1 & 2: Pull full state snapshot to resolve ticker across node deltas
+                        full_snapshot = await trading_swarm.aget_state(config)
+                        snapshot_values = full_snapshot.values or {}
+
+                        extracted_ticker = (
+                            node_state.get("current_ticker") or 
+                            node_state.get("ticker") or 
+                            snapshot_values.get("current_ticker") or
+                            (snapshot_values.get("proposed_trade", {}).get("ticker") if isinstance(snapshot_values.get("proposed_trade"), dict) else None)
+                        )
+                        
+                        if extracted_ticker and extracted_ticker != "UNKNOWN":
                             live_data = get_live_asset_data(extracted_ticker)
                             if live_data:
                                 await websocket.send_json({
                                     "type": "asset_intelligence",
                                     "data": live_data
+                                })
+
+                        # FIX: Flatten nested ticker sentiment payloads before sending to React UI
+                        raw_sent = node_state.get("sentiment_data") or snapshot_values.get("sentiment_data", {})
+                        if isinstance(raw_sent, dict) and raw_sent:
+                            payload_sent = raw_sent
+                            # Unwrap nested ticker structure like {"TSLA": {...}}
+                            if extracted_ticker and extracted_ticker in raw_sent:
+                                payload_sent = raw_sent[extracted_ticker]
+                            elif len(raw_sent) == 1 and isinstance(list(raw_sent.values())[0], dict):
+                                payload_sent = list(raw_sent.values())[0]
+
+                            if isinstance(payload_sent, dict) and ("sentiment_label" in payload_sent or "top_headlines" in payload_sent):
+                                await websocket.send_json({
+                                    "type": "sentiment_data",
+                                    "data": payload_sent
                                 })
 
             current_state = await trading_swarm.aget_state(config)

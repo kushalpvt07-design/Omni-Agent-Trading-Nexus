@@ -1,47 +1,43 @@
 import yfinance as yf
-import pandas as pd
-import numpy as np
+import math
 
-def get_live_asset_data(ticker: str):
-    clean_ticker = ticker.upper().strip().replace("/", "-")
-    
-    crypto_bases = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP"]
-    if clean_ticker in crypto_bases:
-        clean_ticker = f"{clean_ticker}-USD"
-
+def get_live_asset_data(ticker_symbol: str):
+    if not ticker_symbol or ticker_symbol == "UNKNOWN":
+        return None
+        
     try:
-        stock = yf.Ticker(clean_ticker)
-        # FIX: Purge NaN records immediately. This prevents NaN floats from infecting JSON serialization.
-        hist = stock.history(period="1mo", interval="1d").dropna(subset=['close'])
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="1mo")
         
         if hist.empty:
-            print(f"ERROR: Yahoo Finance returned empty data for ticker: {clean_ticker}")
             return None
             
-        hist.columns = [c.lower() for c in hist.columns]
-            
-        current_price = float(hist['close'].iloc[-1])
-        prev_price = float(hist['close'].iloc[-2]) if len(hist) > 1 else float(hist['close'].iloc[0])
+        current_price = float(hist["Close"].iloc[-1])
+        prev_price = float(hist["Close"].iloc[0])
+        change_pct = ((current_price - prev_price) / prev_price) * 100
         
-        change = current_price - prev_price
-        change_pct = (change / prev_price) * 100 if prev_price > 0 else 0.0
+        returns = hist["Close"].pct_change().dropna()
+        volatility = float(returns.std() * (252 ** 0.5) * 100) if not returns.empty else 0.0
         
-        returns = hist['close'].pct_change().dropna()
-        vol_val = returns.std()
-        
-        volatility = float(vol_val * np.sqrt(252) * 100) if pd.notna(vol_val) else 0.0
-        
-        chart_data = [{"date": str(d.date()), "price": round(float(p), 2)} for d, p in zip(hist.index, hist['close'])]
-        
+        if math.isnan(volatility):
+            volatility = 0.0
+
+        chart_data = []
+        for date, row in hist.iterrows():
+            val = float(row["Close"])
+            chart_data.append({
+                "time": date.strftime("%b %d"),
+                "price": round(val, 2) if not math.isnan(val) else 0.0
+            })
+
         return {
-            "ticker": clean_ticker,
+            "ticker": ticker_symbol.upper(),
             "current_price": round(current_price, 2),
-            "change": round(change, 2),
             "change_pct": round(change_pct, 2),
-            "volatility": round(volatility, 1),
-            "is_positive": change >= 0,
+            "volatility": round(volatility, 2),
+            "is_positive": change_pct >= 0,
             "chart_data": chart_data
         }
     except Exception as e:
-        print(f"Error fetching asset data for {clean_ticker}: {e}")
+        print(f"Error fetching asset data for {ticker_symbol}: {e}")
         return None

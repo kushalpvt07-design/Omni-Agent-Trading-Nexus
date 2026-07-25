@@ -37,8 +37,8 @@ async def sentiment_agent_node(state: FinancialSwarmState) -> dict:
                     text_content = result.content
                 try:
                     parsed_result = json.loads(text_content)
-                    return {"sentiment_data": {ticker: parsed_result}}
+                    return {"sentiment_data": parsed_result}
                 except Exception:
-                    return {"sentiment_data": {ticker: {"raw_output": text_content}}}
+                    return {"sentiment_data": {"raw_output": text_content}}
     except Exception as e:
         return {"errors": [f"Sentiment Agent Server Error: {str(e)}"]}
