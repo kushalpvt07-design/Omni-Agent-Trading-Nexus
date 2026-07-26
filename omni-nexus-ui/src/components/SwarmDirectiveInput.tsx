@@ -52,8 +52,8 @@ export default function SwarmDirectiveInput({ logs, isDeploying, onSendDirective
             No directives processed yet. The terminal is on standby.
           </div>
         ) : (
-          logs.map((log) => (
-            <div key={log.id} className="leading-relaxed animate-fade-in">
+          logs.map((log, index) => (
+            <div key={index} className="leading-relaxed animate-fade-in">
               <span className="text-slate-600 mr-2">[{log.timestamp}]</span>
               
               {log.type === "user" && (

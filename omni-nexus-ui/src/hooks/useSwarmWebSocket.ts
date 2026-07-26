@@ -71,10 +71,19 @@ export function useSwarmWebSocket(url: string) {
 
   const deployDirective = useCallback((directive: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      
+      // Immediately construct a local log for the UI so it doesn't look dead
+      const userEchoLog: LogMessage = {
+        type: "message",
+        role: "user",
+        content: `> ${directive}`, 
+        timestamp: new Date().toISOString()
+      };
+
       setState((prev) => ({
         ...prev,
         isDeploying: true,
-        directiveLogs: [],
+        directiveLogs: [userEchoLog], // Wipes old logs, inserts the user's command immediately
         assetData: null,
         sentimentData: null,
         pendingCheckpoint: null

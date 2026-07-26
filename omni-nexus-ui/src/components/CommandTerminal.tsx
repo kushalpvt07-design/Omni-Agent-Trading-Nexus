@@ -55,8 +55,8 @@ export default function CommandTerminal({ logs, isDeploying, onSendDirective }: 
             <p className="italic">Terminal idle. Awaiting tactical directive.</p>
           </div>
         ) : (
-          agentMessages.map((msg) => (
-            <div key={msg.id} className={`flex gap-2.5 ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
+          agentMessages.map((msg, index) => (
+            <div key={index} className={`flex gap-2.5 ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
               {msg.type !== "user" && (
                 <div className="w-6 h-6 rounded-md bg-teal-950/50 border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
                   <Bot className="w-3.5 h-3.5" />

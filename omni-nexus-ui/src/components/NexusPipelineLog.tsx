@@ -23,8 +23,8 @@ export default function NexusPipelineLog({ logs }: { logs: LogMessage[] }) {
         {pipelineLogs.length === 0 ? (
           <p className="text-slate-600 italic">No automated sub-routines running.</p>
         ) : (
-          pipelineLogs.map((log) => (
-            <div key={log.id} className="flex items-start gap-3">
+          pipelineLogs.map((log, index) => (
+            <div key={index} className="flex items-start gap-3">
               <span className="text-slate-600 shrink-0">[{log.timestamp}]</span>
               <GitCommit className="w-3.5 h-3.5 text-teal-400 shrink-0 mt-0.5" />
               <span className={log.type === "checkpoint" ? "text-purple-300 font-bold" : "text-slate-300"}>
