@@ -249,19 +249,29 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "data": live_data
                                 })
 
+                        # PROPER BACKEND FIX: Construct a unified consensus payload
                         raw_sent = node_state.get("sentiment_data") or snapshot_values.get("sentiment_data", {})
+                        payload_sent = {}
+                        
                         if isinstance(raw_sent, dict) and raw_sent:
-                            payload_sent = raw_sent
                             if extracted_ticker and extracted_ticker in raw_sent:
-                                payload_sent = raw_sent[extracted_ticker]
+                                payload_sent = dict(raw_sent[extracted_ticker])
                             elif len(raw_sent) == 1 and isinstance(list(raw_sent.values())[0], dict):
-                                payload_sent = list(raw_sent.values())[0]
+                                payload_sent = dict(list(raw_sent.values())[0])
+                            else:
+                                payload_sent = dict(raw_sent)
+                                
+                        # Extract reasoning natively from Orchestrator's proposed_trade state
+                        current_proposed = node_state.get("proposed_trade") or snapshot_values.get("proposed_trade") or {}
+                        if isinstance(current_proposed, dict) and current_proposed.get("reasoning"):
+                            payload_sent["reasoning"] = current_proposed.get("reasoning")
 
-                            if isinstance(payload_sent, dict) and ("sentiment_label" in payload_sent or "top_headlines" in payload_sent):
-                                await websocket.send_json({
-                                    "type": "sentiment_data",
-                                    "data": payload_sent
-                                })
+                        # Dispatch to frontend if we have sentiment metrics OR orchestrator reasoning
+                        if payload_sent and ("sentiment_label" in payload_sent or "top_headlines" in payload_sent or "reasoning" in payload_sent):
+                            await websocket.send_json({
+                                "type": "sentiment_data",
+                                "data": payload_sent
+                            })
 
                         # 2. SEND TERMINAL MESSAGE LAST
                         messages = node_state.get("messages", [])

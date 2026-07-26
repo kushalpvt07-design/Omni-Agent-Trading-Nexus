@@ -4,8 +4,8 @@ import React from "react";
 import { Newspaper } from "lucide-react";
 
 export default function MarketPulse({ sentimentData }: { sentimentData: any }) {
-  // Gracefully handle whatever chaotic array your backend decides to send
-  const headlines = sentimentData?.news_headlines || sentimentData?.headlines || [];
+  // Gracefully handle the chaotic array, now explicitly checking for top_headlines
+  const headlines = sentimentData?.top_headlines || sentimentData?.news_headlines || sentimentData?.headlines || [];
 
   return (
     <div className="w-full h-[240px] rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col shadow-2xl backdrop-blur-md">
@@ -25,7 +25,6 @@ export default function MarketPulse({ sentimentData }: { sentimentData: any }) {
           </div>
         ) : (
           headlines.map((headline: any, i: number) => {
-            // Failsafe in case your backend sends objects instead of raw strings
             const titleText = typeof headline === 'string' ? headline : headline.title || headline.text || "Unknown Headline";
             return (
               <div key={i} className="flex items-start justify-between gap-3 p-3 rounded-lg border border-slate-800/60 bg-[#05080F]">

@@ -22,8 +22,18 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
 
   if (!assetData) {
     return (
-      <div className="w-full h-full rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col items-center justify-center shadow-2xl backdrop-blur-md">
-         <span className="text-slate-500 font-mono animate-pulse">Awaiting Swarm Market Telemetry...</span>
+      <div className="w-full h-full rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col shadow-2xl backdrop-blur-md">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800/80 mb-3">
+          <div className="flex items-center gap-2">
+            <LineChart className="w-4 h-4 text-teal-400" />
+            <h2 className="text-xs tracking-widest font-mono font-bold text-slate-200 uppercase">
+              Asset Intelligence: [AWAITING]
+            </h2>
+          </div>
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center">
+          <span className="text-slate-500 font-mono animate-pulse">Awaiting Swarm Market Telemetry...</span>
+        </div>
       </div>
     );
   }
