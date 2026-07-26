@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { LineChart } from "lucide-react";
+import { LineChart, AlertCircle } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer, YAxis, Tooltip } from "recharts";
 
-// Correct implementation of Recharts CustomTooltip payload extraction
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
@@ -29,11 +28,12 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
     );
   }
 
-  const data = assetData.chart || [];
-  const price = assetData.price || "0.00";
-  const volatility = assetData.volatility || "0.00%";
+  // Failsafe key extractions targeting common backend mismatches
+  const data = assetData.chart || assetData.historical_data || [];
+  const price = assetData.price || assetData.current_price || "0.00";
+  const volatility = assetData.volatility || "0.00";
   const trend = assetData.trend || "+0.00%";
-  const ticker = assetData.ticker || "N/A";
+  const ticker = assetData.ticker || assetData.symbol || "N/A";
 
   return (
     <div className="w-full h-full rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col shadow-2xl backdrop-blur-md">
@@ -61,28 +61,35 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
         </div>
       </div>
 
-      <div className="flex-1 w-full min-h-[150px] mt-2 border border-slate-800/50 rounded-xl bg-[#05080F] overflow-hidden">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data}>
-            <defs>
-              <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <YAxis domain={['auto', 'auto']} hide />
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(45, 212, 191, 0.2)', strokeWidth: 2 }} />
-            <Area 
-              type="monotone" 
-              dataKey="price" 
-              stroke="#2dd4bf" 
-              strokeWidth={2}
-              fillOpacity={1} 
-              fill="url(#colorPrice)" 
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+      <div className="relative flex-1 w-full min-h-[150px] mt-2 border border-slate-800/50 rounded-xl bg-[#05080F] overflow-hidden">
+        {data.length === 0 ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
+            <AlertCircle className="w-5 h-5 text-rose-900" />
+            <span className="text-[10px] font-mono uppercase tracking-widest text-slate-600">No Chart Data In Payload</span>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data}>
+              <defs>
+                <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <YAxis domain={['auto', 'auto']} hide />
+              <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(45, 212, 191, 0.2)', strokeWidth: 2 }} />
+              <Area 
+                type="monotone" 
+                dataKey="price" 
+                stroke="#2dd4bf" 
+                strokeWidth={2}
+                fillOpacity={1} 
+                fill="url(#colorPrice)" 
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4 mt-5">

@@ -230,17 +230,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "content": f"🚨 {err}"
                                 })
                                 
-                        messages = node_state.get("messages", [])
-                        if messages:
-                            content = getattr(messages[-1], "content", str(messages[-1]))
-                            agent_role = node_name.replace("_node", "").replace("_agent", "").upper()
-                            
-                            await websocket.send_json({
-                                "type": "message",
-                                "role": agent_role,
-                                "content": content
-                            })
-
+                        # 1. FETCH AND SEND ASSET/SENTIMENT DATA FIRST
                         full_snapshot = await trading_swarm.aget_state(config)
                         snapshot_values = full_snapshot.values or {}
 
@@ -272,6 +262,18 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "type": "sentiment_data",
                                     "data": payload_sent
                                 })
+
+                        # 2. SEND TERMINAL MESSAGE LAST
+                        messages = node_state.get("messages", [])
+                        if messages:
+                            content = getattr(messages[-1], "content", str(messages[-1]))
+                            agent_role = node_name.replace("_node", "").replace("_agent", "").upper()
+                            
+                            await websocket.send_json({
+                                "type": "message",
+                                "role": agent_role,
+                                "content": content
+                            })
 
             current_state = await trading_swarm.aget_state(config)
             
