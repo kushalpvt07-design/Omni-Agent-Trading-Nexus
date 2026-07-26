@@ -52,7 +52,7 @@ export default function HumanInTheLoopModal({ checkpoint, onResolve }: Props) {
             <div>
               <span className="text-[10px] text-slate-500 uppercase">Alloc</span>
               <p className="text-sm font-bold text-teal-400 mt-1">
-                {checkpoint?.allocation ? `${checkpoint.allocation.toFixed(1)}%` : "N/A"}
+                {typeof checkpoint?.allocation === 'number' ? `${checkpoint.allocation.toFixed(1)}%` : (checkpoint?.allocation || "N/A")}
               </p>
             </div>
           </div>

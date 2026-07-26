@@ -29,20 +29,20 @@ async def pre_flight_risk_node(state: FinancialSwarmState) -> dict:
     return {}
 
 async def risk_agent_node(state: FinancialSwarmState) -> dict:
-    # FLAW 3 FIX: Stop the Risk Desk from burying pre-flight errors
     if state.get("errors"):
         return {"risk_approved": False}
 
     trade = state.get("proposed_trade", {})
     action = trade.get("action", "HOLD")
-    allocation_fallback = trade.get("allocation", 0.0)
     
-    # SAFE TYPE CAST FIX
     raw_shares = trade.get("shares")
     shares = float(raw_shares) if raw_shares is not None else 0.0
+    
+    raw_alloc = trade.get("allocation")
+    allocation = float(raw_alloc) if raw_alloc is not None else 0.0
+
     ticker = state.get("current_ticker", "UNKNOWN")
 
-    # FLAW 4 FIX: Properly acknowledge Orchestrator rejects without "Approving" them
     if action in ["HOLD", "REJECT"]:
         return {"risk_approved": True, "messages": [AIMessage(content=f"🛡️ Risk Desk: Acknowledged orchestration directive to {action}.")]}
 
@@ -75,15 +75,21 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
             overridden_trade = {**trade, "action": "HOLD", "allocation": 0.0, "shares": 0.0, "estimated_price": live_price, "reasoning": f"[RISK REJECTION: Naked shorting prohibited] {trade.get('reasoning', '')}"}
             return {"risk_approved": False, "proposed_trade": overridden_trade, "messages": [AIMessage(content=reject_msg)]}
         
-        if shares > owned_shares:
-            reject_msg = f"⛔ RISK DESK REJECTION: Attempted to SELL {shares} of {ticker}, but ledger only shows {owned_shares} shares owned. Overriding to HOLD."
+        # FIX: Properly respect allocation parameters for partial exits
+        if shares <= 0.0 and allocation > 0:
+            sell_shares = owned_shares * allocation
+        else:
+            sell_shares = shares if shares > 0 else owned_shares
+            
+        if sell_shares > owned_shares:
+            reject_msg = f"⛔ RISK DESK REJECTION: Attempted to SELL {sell_shares} of {ticker}, but ledger only shows {owned_shares} shares owned. Overriding to HOLD."
             overridden_trade = {**trade, "action": "HOLD", "allocation": 0.0, "shares": 0.0, "estimated_price": live_price, "reasoning": f"[RISK REJECTION: Insufficient shares for sell order] {trade.get('reasoning', '')}"}
             return {"risk_approved": False, "proposed_trade": overridden_trade, "messages": [AIMessage(content=reject_msg)]}
         
         approve_msg = f"✅ RISK DESK APPROVAL: Valid SELL order for {ticker}. Inventory verified. Routing to Human Checkpoint."
         updated_trade = trade.copy()
         updated_trade["estimated_price"] = live_price
-        updated_trade["shares"] = shares if shares > 0 else owned_shares
+        updated_trade["shares"] = sell_shares
         
         return {"risk_approved": True, "proposed_trade": updated_trade, "messages": [AIMessage(content=approve_msg)]}
 
@@ -92,7 +98,8 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
         requested_trade_value = shares * live_price
         actual_allocation = requested_trade_value / cash_available if cash_available > 0 else 1.0
     else:
-        actual_allocation = allocation_fallback
+        # FIX: Prevent NoneType crash by strictly typing fallback parsing
+        actual_allocation = allocation if allocation > 0 else 0.1
         requested_trade_value = cash_available * actual_allocation
 
     # OVERDRAFT GUARD
@@ -133,6 +140,10 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
     updated_trade = trade.copy()
     updated_trade["estimated_price"] = live_price
     updated_trade["allocation"] = actual_allocation 
+    
+    # FIX: Explicitly set exact shares for execution agent to prevent double-execution
+    if not updated_trade.get("shares"):
+        updated_trade["shares"] = requested_trade_value / live_price
 
     return {
         "risk_approved": True, 

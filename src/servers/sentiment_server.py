@@ -8,12 +8,13 @@ mcp = FastMCP("SentimentServer")
 @mcp.tool()
 def analyze_market_sentiment(ticker: str, asset_class: str = "equity") -> str:
     """Fetches real market news using yfinance for sentiment analysis."""
-    ticker_upper = ''.join(e for e in ticker.upper() if e.isalnum() or e in ['.', '-', '/'])
+    # FIX: Removed the '.' from the regex. Your upstream parser blocks them anyway.
+    ticker_upper = ''.join(e for e in ticker.upper() if e.isalnum() or e in ['-', '/'])
     clean_ticker = ticker_upper.replace("/", "-")
     
     # If it's a crypto asset, strictly enforce the Yahoo Finance format
-    if asset_class == "crypto" or "/" in ticker_upper:
-        yf_ticker = clean_ticker if "-" in clean_ticker else f"{clean_ticker}-USD"
+    if asset_class == "crypto" or "-" in ticker_upper:
+        yf_ticker = clean_ticker if "-USD" in clean_ticker else f"{clean_ticker}-USD"
     else:
         yf_ticker = clean_ticker
     
@@ -39,7 +40,7 @@ def analyze_market_sentiment(ticker: str, asset_class: str = "equity") -> str:
         payload = {
             "status": "success",
             "ticker": yf_ticker,
-            "latest_headlines": headlines
+            "top_headlines": headlines # FIX: Changed from latest_headlines to top_headlines to match main.py WebSocket logic
         }
         
         return json.dumps(payload, indent=2)

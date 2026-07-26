@@ -7,19 +7,6 @@ from langchain_core.messages import HumanMessage
 from schemas import TradeDirectiveSchema
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-COMPANY_TO_TICKER = {
-    "apple": "AAPL",
-    "tesla": "TSLA",
-    "nvidia": "NVDA",
-    "microsoft": "MSFT",
-    "google": "GOOGL",
-    "alphabet": "GOOGL",
-    "amazon": "AMZN",
-    "meta": "META",
-    "facebook": "META",
-    "netflix": "NFLX"
-}
-
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=10)
@@ -79,14 +66,17 @@ async def parser_node(state: FinancialSwarmState) -> dict:
             
         raw_ticker = getattr(extraction, "ticker", "UNKNOWN") or "UNKNOWN"
         raw_ticker = raw_ticker.strip(" \n\"'").lower()
-        ticker = COMPANY_TO_TICKER.get(raw_ticker, raw_ticker).upper()
+        ticker = raw_ticker.upper()
         
         asset_class = getattr(extraction, "asset_class", "equity") or "equity"
         asset_class = asset_class.strip().lower()
 
-        action = getattr(extraction, "action", "BUY") or "BUY"
+        # FIX: Align default action with TradeDirectiveSchema
+        action = getattr(extraction, "action", "HOLD") or "HOLD"
         quantity = getattr(extraction, "quantity", None)
-        allocation_percentage = getattr(extraction, "allocation_percentage", None)
+        
+        # FIX: Use 'allocation' instead of the deprecated 'allocation_percentage'
+        allocation = getattr(extraction, "allocation", None)
         risk_threshold = getattr(extraction, "risk_threshold", 0.5) or 0.5
 
     except Exception as e:
@@ -103,6 +93,6 @@ async def parser_node(state: FinancialSwarmState) -> dict:
         "asset_class": asset_class,
         "requested_action": action,
         "requested_quantity": quantity,
-        "requested_allocation": allocation_percentage,
+        "requested_allocation": allocation,
         "risk_threshold": risk_threshold
     }

@@ -8,46 +8,49 @@ from src.agents.risk_agent import risk_agent_node
 from src.agents.execution_agent import execution_agent_node
 
 def route_after_orchestrator(state: FinancialSwarmState):
-    proposed_trade = state.get("proposed_trade", {})
-    if not isinstance(proposed_trade, dict):
-        proposed_trade = {}
-        
-    action = str(proposed_trade.get("action", "HOLD")).upper()
-    shares = float(proposed_trade.get("shares", 0.0) or 0.0)
-    allocation = float(proposed_trade.get("allocation", 0.0) or 0.0)
+    proposed_trade = state.get("proposed_trade")
     
-    # Halt graph on HOLD or REJECT
-    if action in ["REJECT", "HOLD"] or (shares <= 0.0 and allocation <= 0.0):
+    # Safely extract action whether it's a model, dataclass, or dict
+    if hasattr(proposed_trade, "action"):
+        action = str(proposed_trade.action).upper()
+    elif isinstance(proposed_trade, dict):
+        action = str(proposed_trade.get("action", "HOLD")).upper()
+    else:
+        action = "HOLD"
+    
+    # Only halt if explicitly rejected
+    if action == "REJECT":
         return END
     
-    return "risk_agent"
+    return "risk_agent_node"
 
 def build_graph():
     builder = StateGraph(FinancialSwarmState)
     
     builder.add_node("parser_node", parser_node)
-    builder.add_node("sentiment_agent", sentiment_agent_node)
-    builder.add_node("quant_agent", quant_agent_node)
-    builder.add_node("orchestrator", orchestrator_node)
-    builder.add_node("risk_agent", risk_agent_node)
-    builder.add_node("execution_agent", execution_agent_node)
+    builder.add_node("sentiment_agent_node", sentiment_agent_node)
+    builder.add_node("quant_agent_node", quant_agent_node)
+    builder.add_node("orchestrator_node", orchestrator_node)
+    builder.add_node("risk_agent_node", risk_agent_node)
+    builder.add_node("execution_agent_node", execution_agent_node)
     
     builder.set_entry_point("parser_node")
     
-    builder.add_edge("parser_node", "sentiment_agent")
-    builder.add_edge("sentiment_agent", "quant_agent")
-    builder.add_edge("quant_agent", "orchestrator")
+    builder.add_edge("parser_node", "sentiment_agent_node")
+    builder.add_edge("sentiment_agent_node", "quant_agent_node")
+    builder.add_edge("quant_agent_node", "orchestrator_node")
     
     builder.add_conditional_edges(
-        "orchestrator",
+        "orchestrator_node",
         route_after_orchestrator,
         {
-            "risk_agent": "risk_agent",
+            "risk_agent_node": "risk_agent_node",
             END: END
         }
     )
     
-    builder.add_edge("risk_agent", "execution_agent")
-    builder.add_edge("execution_agent", END)
+    builder.add_edge("risk_agent_node", "execution_agent_node")
+    builder.add_edge("execution_agent_node", END)
     
+    # FIX: Return uncompiled StateGraph builder so main.py can manage compilation flags
     return builder

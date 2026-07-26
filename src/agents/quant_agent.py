@@ -1,45 +1,53 @@
-from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
+import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from tenacity import retry, stop_after_attempt, wait_exponential
 from src.state import FinancialSwarmState
-import os
 
-# Define the strict extraction schema
-class TickerExtraction(BaseModel):
-    ticker: str = Field(description="The exact 1 to 5 letter stock ticker symbol (e.g., AAPL, TSLA, MSFT). If none is found, return 'UNKNOWN'.")
-
-from langchain_core.messages import HumanMessage
+# FIX 2: Wrapped the brittle MCP subprocess in a proper retry block
+@retry(
+    stop=stop_after_attempt(3), 
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
+async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
+    server_params = StdioServerParameters(command=sys.executable, args=["-m", "src.servers.quant_server"])
+    
+    async with stdio_client(server_params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get_daily_close_price", 
+                arguments={"ticker": ticker, "asset_class": asset_class}
+            )
+            
+            if getattr(result, "isError", False):
+                raise RuntimeError(f"MCP Server Internal Error: {result.content}")
+            
+            if isinstance(result.content, list):
+                return result.content[0].text if len(result.content) > 0 else "{}"
+            
+            return str(result.content)
 
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
-    # ADD THIS GUARD: Skip execution if upstream errors exist
     if state.get("errors"):
         return {}
 
     ticker = state.get("current_ticker", "")
     asset_class = state.get("asset_class", "equity")
+    
     if ticker == "UNKNOWN" or not ticker:
         return {"errors": ["Quant Agent: Could not resolve a valid ticker symbol from the state."]}
 
-    import sys
-    server_params = StdioServerParameters(command=sys.executable, args=["-m", "src.servers.quant_server"])
-
     try:
-        async with stdio_client(server_params) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                result = await session.call_tool("get_daily_close_price", arguments={"ticker": ticker, "asset_class": asset_class})
-                
-                if getattr(result, "isError", False):
-                    return {"errors": [f"MCP Server Internal Error: {result.content}"]}
-                
-                if isinstance(result.content, list):
-                    text_content = result.content[0].text if len(result.content) > 0 else "{}"
-                else:
-                    text_content = result.content
-                # FIX: Do NOT return 'current_ticker' to prevent LangGraph parallel write conflict
-                return {
-                    "quant_data": {ticker: text_content}
-                }
+        text_content = await fetch_mcp_quant_data(ticker, asset_class)
+        
+        # FIX 3: Prevent passing empty/None strings to Risk Desk to avoid JSONDecodeErrors
+        if not text_content or text_content.strip() == "":
+            text_content = "{}"
+            
+        return {
+            "quant_data": {ticker: text_content}
+        }
     except Exception as e:
         return {"errors": [f"Quant Server Error: {str(e)}"]}

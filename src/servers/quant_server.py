@@ -2,12 +2,11 @@ import json
 import os
 import math
 import pandas as pd
-import yfinance as yf
 from mcp.server.fastmcp import FastMCP
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # FIX: Imported timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,52 +22,41 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
     if not ticker_upper or len(ticker_upper) > 20:
         return json.dumps({"status": "error", "message": "Invalid ticker symbol format. Must be 1-20 characters."})
     
+    # FIX: Alpaca requires timezone-aware datetime objects. 
+    # Using naive datetime.now() will cause a ValueError crash.
     try:
-        start_date = datetime.now() - timedelta(days=45) 
+        start_date = datetime.now(timezone.utc) - timedelta(days=45) 
         
-        if "." in ticker_upper:
-            stock = yf.Ticker(ticker_upper)
-            bars = stock.history(period="45d")
-            
-            if bars.empty:
-                return json.dumps({"status": "error", "message": f"No data found for {ticker_upper} on Yahoo Finance."})
-                
-            bars.columns = [c.lower() for c in bars.columns]
-            closes = bars['close'].tail(30)
-            std_dev = float(closes.std()) if len(closes) > 1 else 0.0
-            sma = float(closes.mean())
-            latest_close = float(closes.iloc[-1])
-            raw_vol = bars['volume'].iloc[-1]
-            latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
-            
+        # FIX: Removed the dead yfinance logic. Your parser_agent_5.py blocks international 
+        # tickers (with '.') from ever reaching this server anyway.
+        
+        if asset_class == "crypto":
+            alpaca_ticker = ticker_upper.replace("-", "/")
+            client = CryptoHistoricalDataClient(api_key, secret_key)
+            request_params = CryptoBarsRequest(
+                symbol_or_symbols=[alpaca_ticker],
+                timeframe=TimeFrame.Day,
+                start=start_date
+            )
+            bars = client.get_crypto_bars(request_params).df
         else:
-            if asset_class == "crypto":
-                alpaca_ticker = ticker_upper.replace("-", "/")
-                client = CryptoHistoricalDataClient(api_key, secret_key)
-                request_params = CryptoBarsRequest(
-                    symbol_or_symbols=[alpaca_ticker],
-                    timeframe=TimeFrame.Day,
-                    start=start_date
-                )
-                bars = client.get_crypto_bars(request_params).df
-            else:
-                client = StockHistoricalDataClient(api_key, secret_key)
-                request_params = StockBarsRequest(
-                    symbol_or_symbols=[ticker_upper],
-                    timeframe=TimeFrame.Day,
-                    start=start_date
-                )
-                bars = client.get_stock_bars(request_params).df
-                
-            if bars.empty:
-                return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}."})
+            client = StockHistoricalDataClient(api_key, secret_key)
+            request_params = StockBarsRequest(
+                symbol_or_symbols=[ticker_upper],
+                timeframe=TimeFrame.Day,
+                start=start_date
+            )
+            bars = client.get_stock_bars(request_params).df
+            
+        if bars.empty:
+            return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}."})
 
-            closes = bars['close'].tail(30)
-            std_dev = float(closes.std()) if len(closes) > 1 else 0.0
-            sma = float(closes.mean())
-            latest_close = float(closes.iloc[-1])
-            raw_vol = bars['volume'].iloc[-1]
-            latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
+        closes = bars['close'].tail(30)
+        std_dev = float(closes.std()) if len(closes) > 1 else 0.0
+        sma = float(closes.mean())
+        latest_close = float(closes.iloc[-1])
+        raw_vol = bars['volume'].iloc[-1]
+        latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
         
         if sma > 0 and abs(latest_close - sma) / sma > 0.5:
             return json.dumps({

@@ -38,12 +38,7 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     requested_quantity = state.get("requested_quantity")
     raw_alloc = state.get("requested_allocation")
     
-    try:
-        requested_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
-    except ValueError:
-        requested_allocation = 0.1
-
-    # FLAW 1 FIX: Replaced hallucinated and dead models with verified 2026 endpoints
+    # FLAW 1 FIX: Replaced hallucinated and dead models with verified endpoints
     models_to_try = [
         "gemini-3.6-flash",
         "gemini-3.5-flash",
@@ -54,7 +49,6 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "gemini-2.5-flash-lite"
     ]
     
-    # FLAW 2 FIX: Removed deprecated temperature parameter
     primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0])
     structured_llm = primary_llm.with_structured_output(OrchestratorDirective)
     
@@ -87,12 +81,21 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         
         if decision.action == "REJECT":
             final_action = "REJECT"
-            final_shares = 0.0
-            final_allocation = 0.0
+            final_shares = None
+            final_allocation = None
         else:
             final_action = decision.action
-            final_shares = float(requested_quantity) if requested_quantity is not None else 0.0
-            final_allocation = requested_allocation
+            
+            # FIX: Mutually exclusive allocation vs shares to prevent API double-execution
+            if requested_quantity is not None and float(requested_quantity) > 0:
+                final_shares = float(requested_quantity)
+                final_allocation = None
+            else:
+                final_shares = None
+                try:
+                    final_allocation = float(raw_alloc) if raw_alloc is not None else 0.1
+                except (ValueError, TypeError):
+                    final_allocation = 0.1
 
         proposed_trade = {
             "ticker": active_ticker,
@@ -103,7 +106,7 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
             "reasoning": decision.reasoning
         }
         
-        report_qty = f"{final_shares} Shares" if final_shares > 0 else f"{final_allocation*100:.1f}% Allocation"
+        report_qty = f"{final_shares} Shares" if final_shares else f"{final_allocation*100:.1f}% Allocation" if final_allocation else "N/A"
         
         final_report = (
             f"**AI Swarm Analysis Complete for {active_ticker}**\n\n"

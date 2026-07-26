@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useSwarmWebSocket } from "@/hooks/useSwarmWebSocket";
-import CommandTerminal from "@/components/CommandTerminal";
+import SwarmDirectiveInput from "@/components/SwarmDirectiveInput";
 import AssetIntelligence from "@/components/AssetIntelligence";
 import MarketPulse from "@/components/MarketPulse";
 import SwarmConsensus from "@/components/SwarmConsensus";
@@ -11,16 +11,15 @@ import HumanInTheLoopModal from "@/components/HumanInTheLoopModal";
 import { Activity } from "lucide-react";
 
 export default function OmniAgentNexus() {
+  // If useSwarmWebSocket is broken, this will fail. Upload it next.
   const { state, deployDirective, resolveCheckpoint } = useSwarmWebSocket(
     "ws://127.0.0.1:8000/api/v1/swarm-stream"
   );
 
   return (
     <div className="min-h-screen bg-[#070b14] text-slate-200 p-4 md:p-6 font-sans relative overflow-x-hidden selection:bg-teal-500/30">
-      {/* Background Cyber Grid */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f293710_1px,transparent_1px),linear-gradient(to_bottom,#1f293710_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none" />
 
-      {/* HEADER */}
       <header className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center mb-6 pb-4 border-b border-slate-800/80 gap-4">
         <div>
           <div className="flex items-center gap-3">
@@ -49,24 +48,34 @@ export default function OmniAgentNexus() {
         </div>
       </header>
 
-      {/* 2x2 MAIN GRID */}
-      <main className="relative z-10 grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <CommandTerminal 
-          logs={state.directiveLogs} 
-          isDeploying={state.isDeploying} 
-          onSendDirective={deployDirective} 
-        />
-        <AssetIntelligence assetData={state.assetData} />
-        <MarketPulse sentimentData={state.sentimentData} />
-        <SwarmConsensus sentimentData={state.sentimentData} />
+      {/* Main App Layout */}
+      <main className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+        
+        {/* Left Column: Command & Pipeline */}
+        <div className="lg:col-span-5 flex flex-col gap-6">
+          <div className="h-[450px]">
+            <SwarmDirectiveInput 
+              logs={state.directiveLogs} 
+              isDeploying={state.isDeploying} 
+              onSendDirective={deployDirective} 
+            />
+          </div>
+          <NexusPipelineLog logs={state.directiveLogs} />
+        </div>
+
+        {/* Right Column: Asset Telemetry & Consensus */}
+        <div className="lg:col-span-7 flex flex-col gap-6">
+          <div className="h-[280px]">
+            <AssetIntelligence assetData={state.assetData} />
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <SwarmConsensus sentimentData={state.sentimentData} />
+            <MarketPulse sentimentData={state.sentimentData} />
+          </div>
+        </div>
+
       </main>
 
-      {/* BOTTOM PANEL */}
-      <footer className="relative z-10">
-        <NexusPipelineLog logs={state.directiveLogs} />
-      </footer>
-
-      {/* HITL OVERLAY MODAL */}
       <HumanInTheLoopModal
         checkpoint={state.pendingCheckpoint}
         onResolve={resolveCheckpoint}

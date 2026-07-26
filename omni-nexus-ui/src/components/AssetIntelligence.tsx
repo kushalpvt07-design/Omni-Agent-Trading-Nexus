@@ -2,23 +2,38 @@
 
 import React, { useState } from "react";
 import { LineChart } from "lucide-react";
-import { AreaChart, Area, ResponsiveContainer, YAxis } from "recharts";
+import { AreaChart, Area, ResponsiveContainer, YAxis, Tooltip } from "recharts";
+
+// Correct implementation of Recharts CustomTooltip payload extraction
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-900/90 p-2 backdrop-blur shadow-xl text-xs font-mono">
+        <p className="text-slate-400">{label || "Time"}</p>
+        <p className="text-teal-400 font-bold">${Number(payload[0].value).toFixed(2)}</p>
+      </div>
+    );
+  }
+  return null;
+};
 
 export default function AssetIntelligence({ assetData }: { assetData: any }) {
   const [timeframe, setTimeframe] = useState("1M");
-  
-  // Custom timeframes as requested
   const timeframes = ["1D", "5D", "15D", "1M", "ALL"];
 
-  // Fallback mock data to prevent crashes if backend sends nothing
-  const data = assetData?.chart || [
-    { price: 310 }, { price: 315 }, { price: 312 }, { price: 320 }, { price: 333.02 }
-  ];
+  if (!assetData) {
+    return (
+      <div className="w-full h-full rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col items-center justify-center shadow-2xl backdrop-blur-md">
+         <span className="text-slate-500 font-mono animate-pulse">Awaiting Swarm Market Telemetry...</span>
+      </div>
+    );
+  }
 
-  const price = assetData?.price || "333.02";
-  const volatility = assetData?.volatility || "30.09%";
-  const trend = assetData?.trend || "+21.03%";
-  const ticker = assetData?.ticker || "AAPL";
+  const data = assetData.chart || [];
+  const price = assetData.price || "0.00";
+  const volatility = assetData.volatility || "0.00%";
+  const trend = assetData.trend || "+0.00%";
+  const ticker = assetData.ticker || "N/A";
 
   return (
     <div className="w-full h-full rounded-2xl border border-slate-800/80 bg-[#0A0E17]/80 p-5 flex flex-col shadow-2xl backdrop-blur-md">
@@ -56,6 +71,7 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
               </linearGradient>
             </defs>
             <YAxis domain={['auto', 'auto']} hide />
+            <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(45, 212, 191, 0.2)', strokeWidth: 2 }} />
             <Area 
               type="monotone" 
               dataKey="price" 

@@ -60,10 +60,16 @@ async def analyze_trade(request: TradeRequest):
             "paper_trading_enabled": request.paper_trading,
             "quant_data": {}, 
             "sentiment_data": {}, 
-            "current_ticker": "", 
-            "asset_class": "equity", 
+            "current_ticker": None, 
+            "asset_class": "equity",
+            "requested_action": None,
+            "requested_quantity": None,
+            "requested_allocation": None,
+            "risk_threshold": 0.5,
             "proposed_trade": {},
             "risk_approved": False, 
+            "requires_human_approval": True, # FIX: Added to initialization
+            "human_approved": False,         # FIX: Added to initialization
             "errors": []
         }
         
@@ -80,9 +86,9 @@ async def analyze_trade(request: TradeRequest):
         
         raw_shares = proposed_trade.get("shares")
         try:
-            shares_val = float(raw_shares) if raw_shares is not None else 0.0
+            shares_val = float(raw_shares) if raw_shares is not None else None
         except (ValueError, TypeError):
-            shares_val = 0.0
+            shares_val = None
             
         return TradeResponse(
             status="success",
@@ -99,9 +105,10 @@ async def analyze_trade(request: TradeRequest):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
+    # FIX: Corrected graph mismatch. Now uses standardized _node suffix.
     trading_swarm = build_graph().compile(
         checkpointer=global_checkpointer,
-        interrupt_before=["execution_agent"]
+        interrupt_before=["execution_agent_node"]
     )
     
     active_thread_id = None
@@ -124,7 +131,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 config = {"configurable": {"thread_id": active_thread_id}}
                 current_state = await trading_swarm.aget_state(config)
                 
-                if not current_state.next or "execution_agent" not in current_state.next:
+                # FIX: Corrected graph mismatch logic string here as well.
+                if not current_state.next or "execution_agent_node" not in current_state.next:
                     await websocket.send_json({"type": "message", "role": "System Alert", "content": "Error: No active trade pending execution in this thread."})
                     continue
 
@@ -132,23 +140,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if is_approved:
                     await websocket.send_json({"type": "message", "role": "System", "content": "Trade Approved. Dispatching to Execution Agent..."})
+                    
+                    # FIX: Explicitly update state so execution engine knows it's cleared
+                    await trading_swarm.aupdate_state(config, {
+                        "human_approved": True
+                    })
                 else:
                     await websocket.send_json({"type": "message", "role": "System Alert", "content": "Trade Rejected by User. Swarm halted."})
                     
-                    current_trade = current_state.values.get("proposed_trade")
-                    if not isinstance(current_trade, dict):
-                        current_trade = {}
+                    raw_trade = current_state.values.get("proposed_trade", {})
+                    
+                    # FIX: Safely cast to a new dict to avoid AttributeError on frozen state objects
+                    safe_trade = dict(raw_trade) if hasattr(raw_trade, "keys") else {}
                         
-                    current_trade.update({
-                        "action": "HOLD", 
-                        "shares": 0.0, 
-                        "allocation": 0.0, 
-                        "ticker": "CANCELLED"
-                    })
+                    safe_trade["action"] = "HOLD"
+                    safe_trade["shares"] = None
+                    safe_trade["allocation"] = None
+                    safe_trade["ticker"] = "CANCELLED"
+                    safe_trade["estimated_price"] = 0.0
                     
                     await trading_swarm.aupdate_state(config, {
                         "risk_approved": False,
-                        "proposed_trade": current_trade
+                        "human_approved": False,
+                        "proposed_trade": safe_trade
                     })
                 
                 async for event in trading_swarm.astream(None, config=config, stream_mode="updates"):
@@ -175,20 +189,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 "paper_trading_enabled": payload.get("paper_trading", True),
                 "quant_data": {},
                 "sentiment_data": {},
-                "current_ticker": "",
+                "current_ticker": None,
                 "asset_class": "equity", 
+                "requested_action": None,
+                "requested_quantity": None,
+                "requested_allocation": None,
+                "risk_threshold": 0.5,
                 "proposed_trade": {},
                 "risk_approved": False,
+                "requires_human_approval": True, # FIX: Added to initialization
+                "human_approved": False,         # FIX: Added to initialization
                 "errors": []
             }
 
             PHASE_LABELS = {
                 "parser_node": "Parser Agent: Extracting structured parameters from prompt...",
-                "sentiment_agent": "Sentiment Agent: Scraping news feed & calculating market bias...",
-                "quant_agent": "Quant Agent: Analyzing technical indicators & volatility...",
-                "orchestrator": "Orchestrator Agent: Synthesizing swarm intelligence...",
-                "risk_agent": "Risk Desk: Checking exposure limits & compliance thresholds...",
-                "execution_agent": "Execution Agent: Order execution ready."
+                "sentiment_agent_node": "Sentiment Agent: Scraping news feed & calculating market bias...",
+                "quant_agent_node": "Quant Agent: Analyzing technical indicators & volatility...",
+                "orchestrator_node": "Orchestrator Agent: Synthesizing swarm intelligence...",
+                "risk_agent_node": "Risk Desk: Checking exposure limits & compliance thresholds...",
+                "execution_agent_node": "Execution Agent: Order execution ready."
             }
 
             async for event in trading_swarm.astream(initial_state, config=config, stream_mode="updates"):
@@ -221,7 +241,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "content": content
                             })
 
-                        # FIX 1 & 2: Pull full state snapshot to resolve ticker across node deltas
                         full_snapshot = await trading_swarm.aget_state(config)
                         snapshot_values = full_snapshot.values or {}
 
@@ -240,11 +259,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "data": live_data
                                 })
 
-                        # FIX: Flatten nested ticker sentiment payloads before sending to React UI
                         raw_sent = node_state.get("sentiment_data") or snapshot_values.get("sentiment_data", {})
                         if isinstance(raw_sent, dict) and raw_sent:
                             payload_sent = raw_sent
-                            # Unwrap nested ticker structure like {"TSLA": {...}}
                             if extracted_ticker and extracted_ticker in raw_sent:
                                 payload_sent = raw_sent[extracted_ticker]
                             elif len(raw_sent) == 1 and isinstance(list(raw_sent.values())[0], dict):
@@ -257,7 +274,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                 })
 
             current_state = await trading_swarm.aget_state(config)
-            if current_state.next and "execution_agent" in current_state.next:
+            
+            # FIX: Final graph mismatch string replaced.
+            if current_state.next and "execution_agent_node" in current_state.next:
                 proposed_trade = current_state.values.get("proposed_trade")
                 if not isinstance(proposed_trade, dict):
                     proposed_trade = {}
@@ -266,14 +285,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 raw_shrs = proposed_trade.get("shares")
                 
                 try:
-                    alloc_val = float(raw_alloc) if raw_alloc is not None else 0.0
+                    alloc_val = float(raw_alloc) if raw_alloc is not None else None
                 except (ValueError, TypeError):
-                    alloc_val = 0.0
+                    alloc_val = None
                     
                 try:
-                    shrs_val = float(raw_shrs) if raw_shrs is not None else 0.0
+                    shrs_val = float(raw_shrs) if raw_shrs is not None else None
                 except (ValueError, TypeError):
-                    shrs_val = 0.0
+                    shrs_val = None
                 
                 await websocket.send_json({
                     "type": "checkpoint",
@@ -282,8 +301,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "trade_details": {
                         "ticker": proposed_trade.get("ticker", "UNKNOWN"),
                         "action": proposed_trade.get("action", "REVIEW"),
-                        "allocation": alloc_val * 100,
-                        "shares": shrs_val
+                        "allocation": (alloc_val * 100) if alloc_val is not None else "TBD",
+                        "shares": shrs_val if shrs_val is not None else "TBD"
                     }
                 })
             else:

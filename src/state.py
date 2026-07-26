@@ -10,8 +10,9 @@ def merge_dicts(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
 class TradeProposal(TypedDict, total=False):
     action: str          # BUY, SELL, HOLD
     ticker: str
-    quantity: Optional[float]
+    shares: Optional[float]
     allocation: Optional[float]
+    estimated_price: Optional[float] # FIX: Explicitly declared to prevent TypedDict validation crashes
     reasoning: str
 
 class FinancialSwarmState(TypedDict):
@@ -23,11 +24,11 @@ class FinancialSwarmState(TypedDict):
     quant_data: Annotated[Dict[str, Any], merge_dicts]
     sentiment_data: Annotated[Dict[str, Any], merge_dicts]
     
-    # Extracted Entities (Optional because parser might fail or not find them yet)
+    # Extracted Entities
     current_ticker: Optional[str] 
     asset_class: Optional[str]
     
-    # User's exact request extracted by parser (Strictly Typed)
+    # User's exact request extracted by parser
     requested_action: Optional[str]
     requested_quantity: Optional[float]
     requested_allocation: Optional[float]
@@ -37,3 +38,7 @@ class FinancialSwarmState(TypedDict):
     proposed_trade: TradeProposal
     risk_approved: bool
     paper_trading_enabled: bool
+    
+    # HITL (Human-in-the-Loop) safety checks
+    requires_human_approval: bool
+    human_approved: bool

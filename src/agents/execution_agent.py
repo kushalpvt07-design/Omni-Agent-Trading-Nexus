@@ -4,16 +4,20 @@ from langchain_core.messages import AIMessage
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from src.agents.risk_agent import get_available_cash, get_ledger_data
+from src.state import FinancialSwarmState
+from src.agents.risk_agent import get_ledger_data, LEDGER_FILE
 
-def execution_agent_node(state):
+async def execution_agent_node(state: FinancialSwarmState) -> dict:
     if not state.get("risk_approved", False):
         return {"messages": [AIMessage(content="Execution skipped: Risk Desk rejected the trade.")]}
+        
+    # FIX: The missing Human-In-The-Loop check you claimed to have
+    if state.get("requires_human_approval", True) and not state.get("human_approved", False):
+        return {"messages": [AIMessage(content="Execution stalled: Waiting for explicit human approval.")]}
     
     trade = state.get("proposed_trade", {})
     action = trade.get("action", "HOLD")
     ticker = trade.get("ticker", "")
-    allocation = trade.get("allocation", 0.0)
     live_price = trade.get("estimated_price", 0.0)
     
     if action in ["HOLD", "REJECT"] or live_price <= 0:
@@ -21,33 +25,16 @@ def execution_agent_node(state):
 
     if "." in ticker:
         return {
-            "messages": [AIMessage(content=f"Execution Engine: Skipping Alpaca submission for regional stock '{ticker}'.")]
+            "messages": [AIMessage(content=f"Execution Engine: Skipping Alpaca submission for international stock '{ticker}'.")]
         }
 
-    ledger_data = get_ledger_data()
-    cash_available = ledger_data["cash"]
-    owned_shares = float(ledger_data["positions"].get(ticker, 0.0))
-
-    # SAFE TYPE CAST FIX
+    # FIX: Trust the Risk Desk's precise share calculation instead of re-doing it
     raw_shares = trade.get("shares")
-    proposed_shares = float(raw_shares) if raw_shares is not None else 0.0
-    
-    if proposed_shares > 0.0:
-        shares = proposed_shares
-    elif action == "BUY" and allocation > 0:
-        shares = round((cash_available * allocation) / live_price, 4)
-    elif action == "SELL":
-        if owned_shares > 0 and allocation > 0:
-            shares = round(owned_shares * allocation, 4)
-        else:
-            return {"messages": [AIMessage(content="Execution Engine: Sell order requires explicit share quantity or valid portfolio inventory.")]}
-    else:
-        return {"messages": [AIMessage(content="Execution Engine: No shares or allocation specified. Action cancelled.")]}
+    shares = float(raw_shares) if raw_shares is not None else 0.0
 
-    # FLAW 3 FIX: Prevent Alpaca 422 HTTP Crash from 0.0 qty orders
     if shares <= 0:
         return {
-            "errors": ["Execution Engine: Calculated shares rounded to 0. Trade aborted to prevent API crash."], 
+            "errors": ["Execution Engine: Share quantity is 0 or invalid. Trade aborted."], 
             "messages": [AIMessage(content="Execution Engine aborted: Share quantity is 0.")]
         }
 
@@ -55,12 +42,11 @@ def execution_agent_node(state):
     is_paper = state.get("paper_trading_enabled", True)
     asset_class = state.get("asset_class", "equity")
     
-    # FLAW 2 FIX: Validate API credentials before initializing client
     api_key = os.getenv("ALPACA_API_KEY")
     sec_key = os.getenv("ALPACA_SECRET_KEY")
     if not api_key or not sec_key:
         return {
-            "errors": ["Execution Engine: Missing Alpaca API credentials in environment."], 
+            "errors": ["Execution Engine: Missing Alpaca API credentials."], 
             "messages": [AIMessage(content="Execution Engine aborted: Missing API credentials.")]
         }
         
@@ -78,13 +64,8 @@ def execution_agent_node(state):
         order = client.submit_order(order_data)
         mode = "PAPER" if is_paper else "LIVE"
         
-        # FLAW 1 FIX: The amnesia-proof ledger update you ignored last time
-        ledger_path = "portfolio_ledger.json"
-        if os.path.exists(ledger_path):
-            with open(ledger_path, "r") as f:
-                ledger = json.load(f)
-        else:
-            ledger = {"cash": 100000.0, "positions": {}}
+        # FIX: Use the imported function and constant instead of hardcoding the path
+        ledger = get_ledger_data()
             
         trade_value = shares * live_price
         if action == "BUY":
@@ -93,11 +74,10 @@ def execution_agent_node(state):
         elif action == "SELL":
             ledger["cash"] += trade_value
             ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) - shares
-            # ROUNDING RESIDUAL FIX
             if round(ledger["positions"][ticker], 4) <= 0:
                 del ledger["positions"][ticker]
                 
-        with open(ledger_path, "w") as f:
+        with open(LEDGER_FILE, "w") as f:
             json.dump(ledger, f, indent=4)
 
         return {
