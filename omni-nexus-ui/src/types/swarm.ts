@@ -21,6 +21,7 @@ export interface AssetData {
   is_positive: boolean;
   chart_data: ChartDataPoint[];
   timeframe_data?: Record<string, ChartDataPoint[]>;
+  currency?: string;
 }
 
 // ---- Sentiment / Consensus (from sentiment_server.py) ----

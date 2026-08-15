@@ -5,14 +5,14 @@ import logging
 logger = logging.getLogger("omni-nexus.utils")
 
 
-def _build_chart_data(hist):
+def _build_chart_data(hist, time_format="%d/%m"):
     """Convert a DataFrame of historical prices into chart-ready JSON data."""
     chart_data = []
     for date, row in hist.iterrows():
         val = float(row["Close"])
         chart_data.append(
             {
-                "time": date.strftime("%d/%m"),
+                "time": date.strftime(time_format),
                 "price": round(val, 2) if not math.isnan(val) else 0.0,
             }
         )
@@ -40,6 +40,9 @@ def get_live_asset_data(ticker_symbol: str):
         clean_ticker = ticker_upper  # Keep as-is for Yahoo Finance
     else:
         clean_ticker = ticker_upper.replace("/", "-")
+
+    # Determine currency based on market
+    currency = "INR" if is_indian_market else "USD"
 
     try:
         ticker = yf.Ticker(clean_ticker)
@@ -83,9 +86,18 @@ def get_live_asset_data(ticker_symbol: str):
             "1M": chart_data,  # Already have this from the main query
         }
 
-        # Slice the existing 1M history for shorter timeframes
-        if len(hist) >= 1:
+        # 1D: Fetch intraday hourly data for detailed 1-day view
+        try:
+            hist_1d = ticker.history(period="1d", interval="1h")
+            if not hist_1d.empty:
+                timeframe_data["1D"] = _build_chart_data(hist_1d, time_format="%H:%M")
+            else:
+                # Fallback: use last day from daily data
+                timeframe_data["1D"] = _build_chart_data(hist.iloc[-1:])
+        except Exception:
             timeframe_data["1D"] = _build_chart_data(hist.iloc[-1:])
+
+        # 5D and 15D: Slice from existing monthly data
         if len(hist) >= 5:
             timeframe_data["5D"] = _build_chart_data(hist.iloc[-5:])
         else:
@@ -95,7 +107,7 @@ def get_live_asset_data(ticker_symbol: str):
         else:
             timeframe_data["15D"] = chart_data
 
-        # Fetch extended history for ALL (max available data)
+        # ALL: Fetch extended 1-year history
         try:
             hist_all = ticker.history(period="1y")
             if not hist_all.empty:
@@ -113,6 +125,7 @@ def get_live_asset_data(ticker_symbol: str):
             "is_positive": change_pct >= 0,
             "chart_data": chart_data,
             "timeframe_data": timeframe_data,
+            "currency": currency,
         }
     except Exception as e:
         logger.warning("Error fetching asset data for %s: %s", ticker_symbol, e)

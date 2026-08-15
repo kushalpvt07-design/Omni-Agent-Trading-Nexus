@@ -99,15 +99,27 @@ def analyze_market_sentiment(ticker: str, asset_class: str = "equity") -> str:
             stock = yf.Ticker(yf_ticker, session=clean_session)
             news = stock.news
 
+            # Fallback for Indian stocks: try base ticker without .NS/.BO suffix
+            # Yahoo Finance often has better news coverage without exchange suffixes
+            if (not news or len(news) == 0) and is_indian_market:
+                base_ticker = yf_ticker.rsplit(".", 1)[0]
+                logger.info(
+                    "No news for %s, retrying with base ticker %s",
+                    yf_ticker, base_ticker,
+                )
+                fallback_stock = yf.Ticker(base_ticker, session=clean_session)
+                news = fallback_stock.news
+
         headlines = []
         if news:
-            for item in news[:2]:
+            for item in news[:5]:
                 content = item.get("content", {})
                 title = content.get("title") or item.get("title", "")
                 summary = content.get("summary") or item.get("summary", "")
                 if title:
                     headlines.append(f"Title: {title} | Summary: {summary}")
-        else:
+
+        if not headlines:
             headlines.append(f"No recent news found for {yf_ticker}.")
 
         # Compute sentiment score from headline content
