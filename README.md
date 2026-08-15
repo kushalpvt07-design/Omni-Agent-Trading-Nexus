@@ -1,60 +1,204 @@
-# 📈 Omni-Agent Trading Nexus: Autonomous Swarm Execution
+# Omni-Agent Trading Nexus
 
-## 📌 The Problem
-Standard retail trading algorithms are completely blind to qualitative market shifts, while naïve single-agent LLM wrappers will happily hallucinate a "BUY" order on a delisted ticker and liquidate an entire portfolio. Financial systems lack the asynchronous, multi-threaded intelligence required to merge hard quantitative data with real-time sentiment without collapsing under API rate limits or state-wiping data collisions.
+> **Autonomous multi-agent financial analysis and execution system** powered by a LangGraph swarm of specialized AI agents, Model Context Protocol (MCP) data servers, and a real-time Next.js command dashboard.
 
-## 🛡️ The Solution
-This repository implements an autonomous, multi-agent financial swarm. Driven by a deterministic LangGraph state machine, it partitions cognitive load across specialized AI nodes. Distinct agents handle natural language parsing, quantitative technical analysis, and sentiment extraction asynchronously. Crucially, the system enforces a strict Human-in-the-Loop (HITL) execution breakpoint, physically preventing the AI from firing live orders to the brokerage without manual authorization.
+[![License](https://img.shields.io/badge/License-Apache_2.0-teal.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org)
 
-## ⚙️ Key Architecture Components
-* **Stateful Swarm Memory:** Bypasses standard data collisions using custom `operator.add` and `merge_dicts` reducers in the graph state. This allows the Quant and Sentiment agents to compile a massive, unified JSON context payload simultaneously without overwriting each other's data.
-* **Pydantic Execution Guardrails:** The Orchestrator node does not guess. It is forcefully constrained by a strictly typed `TradeProposal` schema. If market volume reads zero or upstream analytical nodes crash, the LLM is hard-coded to override the user's initial request and aggressively output a "REJECT" directive.
-* **Resilient Orchestration:** API rate limits destroy standard AI pipelines. The core Gemini inference engine utilizes intelligent model cascading (defaulting to `gemini-3.6-flash`) wrapped in aggressive exponential backoff, ensuring the swarm survives HTTP 429 throttling without dropping the graph state.
-* **Asynchronous UI Streaming:** A React/TypeScript frontend utilizing a custom `useSwarmWebSocket.ts` hook. It intercepts live LangGraph state mutations and instantly maps the AI's internal reasoning, error logs, and execution proposals directly to the dashboard.
+---
 
-## 🧠 Tech Stack
-* **Frontend:** React, TypeScript, TailwindCSS
-* **Backend / API Gateway:** Python 3, FastAPI, WebSockets
-* **AI Orchestration:** LangGraph, LangChain Core
-* **Data Validation & Resiliency:** Pydantic, Tenacity
-* **Inference Engine:** Google Gemini API (Model Cascading Enabled)
+## Architecture Overview
 
-## 🚀 Quick Start
-This system operates with a decoupled architecture. You must run the FastAPI swarm and the React frontend concurrently.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Next.js Dashboard (UI)                     │
+│  SwarmDirectiveInput → AssetIntelligence → SwarmConsensus       │
+│  MarketPulse → NexusPipelineLog → HumanInTheLoopModal           │
+└──────────────────────┬──────────────────────────────────────────┘
+                       │ WebSocket (ws://localhost:8000)
+┌──────────────────────▼──────────────────────────────────────────┐
+│                     FastAPI Backend (main.py)                    │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │  Parser   │→│ Sentiment │→│  Quant   │→│ Orchestrator  │  │
+│  │  Agent    │  │  Agent    │  │  Agent   │  │    Agent      │  │
+│  └──────────┘  └─────┬─────┘  └────┬─────┘  └──────┬───────┘  │
+│                      │ MCP          │ MCP           │           │
+│               ┌──────▼──────┐ ┌────▼────┐  ┌───────▼────────┐ │
+│               │  Sentiment  │ │  Quant  │  │   Risk Agent   │ │
+│               │   Server    │ │  Server │  │  (Compliance)  │ │
+│               └─────────────┘ └─────────┘  └───────┬────────┘ │
+│                                                     │          │
+│                                            ┌────────▼────────┐ │
+│                                            │ Execution Agent │ │
+│                                            │  (Alpaca API)   │ │
+│                                            └─────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### 1. Initialize the AI Swarm (Backend)
-Navigate to the backend directory and spin up the asynchronous LangGraph environment.
+### Agent Pipeline
+
+| Agent | Responsibility |
+|-------|---------------|
+| **Parser Agent** | Extracts structured trade parameters (ticker, action, quantity) from natural language using Gemini |
+| **Sentiment Agent** | Fetches real-time news headlines via MCP → yfinance and analyzes market sentiment |
+| **Quant Agent** | Retrieves historical price data, volatility metrics, and technical indicators via MCP → Alpaca |
+| **Orchestrator Agent** | Synthesizes all data streams into a final BUY/SELL/HOLD/REJECT decision |
+| **Risk Agent** | Enforces position sizing, volatility limits, overdraft guards, and naked-short prohibition |
+| **Execution Agent** | Submits orders to Alpaca (paper or live), updates the portfolio ledger |
+
+### Safety Features
+
+- **Human-in-the-Loop (HITL):** Every trade pauses at a checkpoint for explicit user approval before execution
+- **Paper Trading Mode:** Enabled by default — no real money at risk
+- **Risk Desk Compliance:** Dynamic position sizing based on 30-day volatility, overdraft prevention, naked-short blocking
+- **Input Sanitization:** User directives are cleaned, truncated, and injection-protected before reaching any LLM
+- **API Authentication:** All REST and WebSocket endpoints are protected via `X-API-Key` and `token` parameters.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| LLM | Google Gemini (via LangChain) |
+| Agent Orchestration | LangGraph (StateGraph with checkpointing) |
+| Data Servers | Model Context Protocol (MCP) |
+| Trading API | Alpaca Markets |
+| Backend | FastAPI + WebSockets |
+| Frontend | Next.js 16 + React 19 + Recharts + Tailwind CSS 4 |
+| State Persistence | SQLite (LangGraph checkpoints) |
+
+---
+
+## Prerequisites
+
+- **Python 3.12+**
+- **Node.js 22+** and npm
+- API keys for:
+  - [Google AI Studio](https://aistudio.google.com/apikey) (Gemini)
+  - [Alpaca Markets](https://app.alpaca.markets/signup) (Paper trading)
+
+---
+
+## Installation
+
+### 1. Clone the Repository
 
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
+git clone https://github.com/kushalpvt07-design/Omni-Agent-Trading-Nexus.git
+cd Omni-Agent-Trading-Nexus
+```
+
+### 2. Backend Setup
+
+```bash
+# Create and activate virtual environment
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## 2. Configure Environment Variables
-Create a .env file in the backend root. Do not commit your API keys.
+### 3. Frontend Setup
 
 ```bash
-GEMINI_API_KEY="your_google_api_key_here"
-ALPACA_API_KEY="your_broker_key"
-ALPACA_SECRET_KEY="your_broker_secret"
+cd omni-nexus-ui
+npm install
+cd ..
 ```
 
-## 3. Launch the Orchestrator
+### 4. Environment Variables
 
 ```bash
-uvicorn main:app --reload --port 8000
+cp .env.example .env
+# Edit .env with your real API keys and generated NEXUS_API_SECRET
+
+# Set up the frontend auth token
+cd omni-nexus-ui
+echo "NEXT_PUBLIC_NEXUS_API_SECRET=your_nexus_api_secret_here" > .env.local
+cd ..
 ```
-The WebSocket stream will be available at ws://localhost:8000/ws
 
-## 🧪 API Usage & Testing
-The system is designed to gracefully handle adversarial inputs and market anomalies.
+---
 
-### Test Case 1: The Delisted Asset / Corrupted Data
-* **State:** User attempts to force a massive buy order on a ticker with 0 volume.
-* **Expected Result:** The Quant agent flags the missing volume in the graph state. The Orchestrator node reads the state, triggers the critical override rule, and forcefully changes the action to "REJECT". `final_shares` and `final_allocation` are zeroed out. The broker API is never touched.
+## Running the Application
 
-### Test Case 2: The HITL Breakpoint
-* **State:** User requests a 10% portfolio allocation on a valid, high-momentum ticker.
-* **Expected Result:** The AI swarm successfully merges sentiment and quant data, calculating the exact estimated price and reasoning. The LangGraph pauses execution. The UI displays the `TradeProposal`. The system remains idle until a human operator toggles the `human_approved` boolean flag to `true`, at which point the final broker execution node fires.
+### Start the Backend (Terminal 1)
+
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Start the Frontend (Terminal 2)
+
+```bash
+cd omni-nexus-ui
+npm run dev
+```
+
+Open **http://localhost:3000** in your browser.
+
+---
+
+## Project Structure
+
+```
+Omni-Agent-Trading-Nexus/
+├── main.py                         # FastAPI entrypoint (Thin composition root)
+├── swarm.py                        # LangGraph state machine definition
+├── schemas.py                      # Pydantic request/response models
+├── utils.py                        # Live asset data utilities (yfinance)
+├── requirements.txt                # Python dependencies
+├── .env.example                    # Environment variable template
+│
+├── src/
+│   ├── state.py                    # FinancialSwarmState TypedDict
+│   ├── core/                       # Settings, logging, security
+│   ├── api/                        # FastAPI routes & middleware
+│   ├── persistence/                # SQLite checkpoint management
+│   ├── agents/                     # LangGraph agent nodes
+│   │   ├── parser_agent.py         # NLP entity extraction
+│   │   ├── sentiment_agent.py      # News sentiment via MCP
+│   │   ├── quant_agent.py          # Technical analysis via MCP
+│   │   ├── orchestrator.py         # Decision synthesis (Gemini)
+│   │   ├── risk_agent.py           # Compliance & risk management
+│   │   └── execution_agent.py      # Alpaca order execution
+│   └── servers/                    # Standalone MCP servers
+│       ├── quant_server.py         # MCP server for Alpaca market data
+│       └── sentiment_server.py     # MCP server for yfinance news
+│
+├── omni-nexus-ui/                  # Next.js 16 dashboard
+│   ├── .env.local                  # Frontend environment variables
+│   └── src/
+│       ├── app/                    # Next.js App Router (page.tsx, layout.tsx)
+│       ├── components/             # React UI Components
+│       ├── hooks/                  # Custom React hooks (useSwarmWebSocket)
+│       ├── types/                  # Shared TypeScript interfaces
+│       └── lib/                    # REST API utilities
+│
+├── .github/workflows/ci.yml       # CI pipeline
+└── LICENSE                         # Apache 2.0
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/health` | No | Health check for monitoring |
+| `POST` | `/api/v1/analyze` | Yes | Stateless single-shot trade analysis |
+| `WS` | `/api/v1/swarm-stream` | Yes | Real-time streaming swarm pipeline with HITL |
+
+---
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Send, Terminal, Loader2, CheckCircle2 } from "lucide-react";
+import { Send, Terminal, Loader2, CheckCircle2, ChevronRight } from "lucide-react";
 
 import { LogMessage } from "@/hooks/useSwarmWebSocket";
 
@@ -30,43 +30,59 @@ export default function SwarmDirectiveInput({ logs, isDeploying, onSendDirective
   };
 
   return (
-    <div className="w-full h-full flex flex-col rounded-xl border border-slate-800 bg-[#070A12] p-5 shadow-2xl backdrop-blur-md">
+    <div className="w-full h-full flex flex-col rounded-2xl glass-card gradient-border p-5 group">
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800/80 mb-4">
-        <div className="flex items-center gap-2">
-          <Terminal className="w-4 h-4 text-emerald-400" />
-          <h2 className="text-xs tracking-widest font-mono font-bold text-slate-200 uppercase">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center transition-all duration-300 group-hover:bg-emerald-500/15">
+            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <h2 className="text-xs tracking-wider font-mono font-semibold text-slate-200 uppercase">
             Swarm Directive Input
           </h2>
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-400/90 bg-emerald-950/30 px-2.5 py-0.5 rounded border border-emerald-800/40">
-          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Hardened Input Enabled</span>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-400/80 bg-emerald-950/20 px-2.5 py-1 rounded-lg border border-emerald-500/15 transition-all duration-300 hover:border-emerald-500/30">
+          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+          <span>Hardened Input</span>
         </div>
       </div>
 
-      {/* Terminal Conversation Output Box */}
-      <div className="flex-1 w-full bg-[#030509] rounded-lg border border-slate-800/90 p-4 font-mono text-xs overflow-y-auto space-y-3 shadow-inner">
+      {/* Terminal Output */}
+      <div className="flex-1 w-full bg-[#020406]/80 rounded-xl border border-slate-800/40 p-4 font-mono text-xs overflow-y-auto space-y-2.5 shadow-inner custom-scrollbar relative">
+        {/* Fake terminal top bar */}
+        <div className="flex items-center gap-1.5 mb-3 pb-2 border-b border-slate-800/30">
+          <div className="w-2 h-2 rounded-full bg-red-500/40" />
+          <div className="w-2 h-2 rounded-full bg-yellow-500/40" />
+          <div className="w-2 h-2 rounded-full bg-green-500/40" />
+          <span className="text-[9px] text-slate-600 ml-2 font-mono">swarm-terminal</span>
+        </div>
+
         {logs.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-slate-600 italic">
-            No directives processed yet. The terminal is on standby.
+          <div className="h-full flex items-center justify-center text-slate-600 italic text-[11px]">
+            <span className="cursor-blink">No directives processed yet. The terminal is on standby</span>
           </div>
         ) : (
           logs.map((log, index) => (
-            <div key={index} className="leading-relaxed animate-fade-in">
-              <span className="text-slate-600 mr-2">[{log.timestamp}]</span>
+            <div key={index} className="leading-relaxed animate-slide-in-right" style={{ animationDelay: `${Math.min(index * 0.05, 0.3)}s` }}>
+              <span className="text-slate-700 mr-2 text-[10px]">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : ''}</span>
               
               {log.type === "user" && (
-                <span className="text-cyan-400 font-bold mr-2">&gt; [USER]:</span>
+                <span className="text-cyan-400 font-bold mr-1.5">&gt; <span className="text-cyan-300/60">[USER]</span></span>
               )}
               {log.type === "status" && (
-                <span className="text-amber-400/90 font-semibold mr-2">&gt; [SYSTEM STATUS]:</span>
+                <span className="text-amber-400/80 font-semibold mr-1.5">
+                  <ChevronRight className="w-3 h-3 inline-block -mt-0.5 text-amber-500/60" />
+                  <span className="text-amber-300/50">[SYS]</span>
+                </span>
               )}
               {log.type === "checkpoint" && (
-                <span className="text-purple-400 font-bold mr-2">&gt; [CHECKPOINT]:</span>
+                <span className="text-purple-400 font-bold mr-1.5">&gt; <span className="text-purple-300/60">[CHECKPOINT]</span></span>
               )}
               {log.type === "message" && log.role !== "USER" && (
-                <span className="text-emerald-400 font-bold mr-2">&gt; [{log.role}]:</span>
+                <span className="text-emerald-400 font-bold mr-1.5">
+                  <ChevronRight className="w-3 h-3 inline-block -mt-0.5 text-emerald-500/60" />
+                  <span className="text-emerald-300/60">[{log.role}]</span>
+                </span>
               )}
 
               <span
@@ -74,10 +90,10 @@ export default function SwarmDirectiveInput({ logs, isDeploying, onSendDirective
                   log.type === "user"
                     ? "text-slate-100 font-medium"
                     : log.type === "status"
-                    ? "text-amber-200/80 italic"
+                    ? "text-amber-200/70 italic"
                     : log.type === "checkpoint"
                     ? "text-purple-200 font-semibold"
-                    : "text-slate-300"
+                    : "text-slate-300/90"
                 }
               >
                 {log.content}
@@ -88,29 +104,32 @@ export default function SwarmDirectiveInput({ logs, isDeploying, onSendDirective
         <div ref={terminalEndRef} />
       </div>
 
-      {/* Input Prompt and Deploy Button */}
-      <form onSubmit={handleDeploy} className="mt-4 flex gap-3">
-        <input
-          type="text"
-          value={directive}
-          onChange={(e) => setDirective(e.target.value)}
-          disabled={isDeploying}
-          placeholder="e.g. Let's scoop up 25 shares of AAPL if volatility risk < 20%"
-          className="flex-1 bg-[#0B0F19] border border-slate-800 focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 rounded-lg px-4 py-3 text-sm text-slate-100 placeholder-slate-600 font-mono transition-all outline-none disabled:opacity-50"
-        />
+      {/* Input + Deploy */}
+      <form onSubmit={handleDeploy} className="mt-4 flex gap-2.5">
+        <div className="flex-1 relative group/input">
+          <input
+            type="text"
+            value={directive}
+            onChange={(e) => setDirective(e.target.value)}
+            disabled={isDeploying}
+            placeholder='e.g. "Scoop up 25 shares of AAPL if volatility risk < 20%"'
+            className="w-full bg-[#080c16] border border-slate-800/60 focus:border-teal-500/40 focus:ring-2 focus:ring-teal-500/10 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-600 font-mono transition-all duration-300 outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+          />
+          <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-teal-500/5 to-cyan-500/5 opacity-0 group-focus-within/input:opacity-100 transition-opacity duration-500 pointer-events-none" />
+        </div>
         <button
           type="submit"
           disabled={isDeploying || !directive.trim()}
-          className={`px-6 py-3 rounded-lg font-mono text-xs font-bold tracking-wider uppercase transition-all duration-200 flex items-center gap-2 ${
+          className={`px-5 py-3 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition-all duration-300 flex items-center gap-2 min-w-[130px] justify-center ${
             isDeploying
-              ? "bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 cursor-not-allowed shadow-[0_0_15px_rgba(16,185,129,0.15)]"
-              : "bg-emerald-600 hover:bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-950/50 active:scale-[0.98] cursor-pointer"
+              ? "bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 cursor-not-allowed glow-teal"
+              : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-slate-950 shadow-lg shadow-emerald-950/40 active:scale-[0.97] cursor-pointer hover:shadow-emerald-500/20"
           }`}
         >
           {isDeploying ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
-              <span>DEPLOYING...</span>
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+              <span>DEPLOYING</span>
             </>
           ) : (
             <>

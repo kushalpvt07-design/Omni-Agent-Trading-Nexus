@@ -1,56 +1,61 @@
 /**
- * API utility for Next.js frontend to communicate with the FastAPI backend.
- * ALL sensitive keys (e.g., Alpaca API) must reside in the backend.
- * 
- * Note: Streaming the live Swarm Consensus feed requires a streaming protocol 
- * like Server-Sent Events (SSE) or WebSockets. This file handles standard REST.
+ * API utility for the Next.js frontend to communicate with the FastAPI backend.
+ * All sensitive keys (e.g., Alpaca API) reside exclusively in the backend.
+ *
+ * The primary real-time channel is the WebSocket in useSwarmWebSocket.ts.
+ * This file handles the stateless REST endpoint for one-shot analysis.
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export interface TradeDirective {
-  ticker: string;
-  action: 'BUY' | 'SELL' | 'HOLD';
-  quantity?: number;
+export interface AnalyzeRequest {
+  directive: string;
+  paper_trading?: boolean;
+}
+
+export interface AnalyzeResponse {
+  status: string;
+  ticker?: string;
+  action?: "BUY" | "SELL" | "HOLD" | "REJECT";
+  shares?: number;
+  risk_approved?: boolean;
+  orchestrator_reasoning?: string;
+  error_message?: string;
 }
 
 /**
- * Sends a trading directive to the FastAPI backend.
+ * Sends a natural-language trading directive to the stateless analysis endpoint.
+ * Returns the swarm's synthesized decision without executing any trade.
  */
-export async function submitTradingDirective(directive: TradeDirective) {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(directive),
-    });
+export async function submitAnalysis(
+  request: AnalyzeRequest
+): Promise<AnalyzeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      directive: request.directive,
+      paper_trading: request.paper_trading ?? true,
+    }),
+  });
 
-    if (!response.ok) {
-      throw new Error(`Backend rejected directive: ${response.statusText}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to submit trading directive:", error);
-    throw error;
+  if (!response.ok) {
+    throw new Error(`Backend rejected directive: ${response.statusText}`);
   }
+
+  return response.json();
 }
 
 /**
- * Initiates an SSE connection for the live Swarm Consensus feed.
+ * Health check — useful for connection status indicators.
  */
-export function connectSwarmFeed(onMessage: (data: string) => void, onError: (err: Event) => void): EventSource {
-  const eventSource = new EventSource(`${API_BASE_URL}/api/swarm/feed`);
-  
-  eventSource.onmessage = (event) => {
-    onMessage(event.data);
-  };
-
-  eventSource.onerror = (error) => {
-    onError(error);
-  };
-
-  return eventSource;
+export async function checkHealth(): Promise<{
+  status: string;
+  version: string;
+}> {
+  const response = await fetch(`${API_BASE_URL}/health`);
+  if (!response.ok) {
+    throw new Error("Backend health check failed");
+  }
+  return response.json();
 }

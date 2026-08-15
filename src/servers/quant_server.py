@@ -1,42 +1,48 @@
 import json
 import os
 import math
+import logging
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from datetime import datetime, timedelta, timezone # FIX: Imported timezone
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("omni-nexus.quant-server")
+
 api_key = os.environ.get("ALPACA_API_KEY")
 secret_key = os.environ.get("ALPACA_SECRET_KEY")
 
 mcp = FastMCP("QuantServer")
 
+
 @mcp.tool()
 def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
     ticker_upper = ticker.upper().strip()
-    
+
     if not ticker_upper or len(ticker_upper) > 20:
-        return json.dumps({"status": "error", "message": "Invalid ticker symbol format. Must be 1-20 characters."})
-    
-    # FIX: Alpaca requires timezone-aware datetime objects. 
-    # Using naive datetime.now() will cause a ValueError crash.
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "Invalid ticker symbol format. Must be 1-20 characters.",
+            }
+        )
+
     try:
-        start_date = datetime.now(timezone.utc) - timedelta(days=45) 
-        
-        # FIX: Removed the dead yfinance logic. Your parser_agent_5.py blocks international 
-        # tickers (with '.') from ever reaching this server anyway.
-        
+        # Alpaca requires timezone-aware datetime objects
+        start_date = datetime.now(timezone.utc) - timedelta(days=45)
+
         if asset_class == "crypto":
             alpaca_ticker = ticker_upper.replace("-", "/")
             client = CryptoHistoricalDataClient(api_key, secret_key)
             request_params = CryptoBarsRequest(
                 symbol_or_symbols=[alpaca_ticker],
                 timeframe=TimeFrame.Day,
-                start=start_date
+                start=start_date,
             )
             bars = client.get_crypto_bars(request_params).df
         else:
@@ -44,58 +50,78 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             request_params = StockBarsRequest(
                 symbol_or_symbols=[ticker_upper],
                 timeframe=TimeFrame.Day,
-                start=start_date
+                start=start_date,
             )
             bars = client.get_stock_bars(request_params).df
-            
-        if bars.empty:
-            return json.dumps({"status": "error", "message": f"No data found for ticker {ticker_upper}."})
 
-        closes = bars['close'].tail(30)
+        if bars.empty:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"No data found for ticker {ticker_upper}.",
+                }
+            )
+
+        closes = bars["close"].tail(30)
         std_dev = float(closes.std()) if len(closes) > 1 else 0.0
         sma = float(closes.mean())
         latest_close = float(closes.iloc[-1])
-        raw_vol = bars['volume'].iloc[-1]
+        raw_vol = bars["volume"].iloc[-1]
         latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
-        
+
+        # Data integrity check — reject if price deviates > 50% from SMA
         if sma > 0 and abs(latest_close - sma) / sma > 0.5:
-            return json.dumps({
-                "status": "error", 
-                "message": f"DATA_CORRUPT: Live price ({latest_close}) deviates from 30-day SMA ({sma}) by > 50%. Possible proxy mismatch or split anomaly."
-            })
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"DATA_CORRUPT: Live price ({latest_close}) deviates from 30-day SMA ({sma}) by > 50%. Possible proxy mismatch or split anomaly.",
+                }
+            )
 
         history_data = []
         for idx, row in bars.tail(5).iterrows():
             ts = idx[1] if isinstance(idx, tuple) else idx
             date_str = pd.to_datetime(ts).strftime("%Y-%m-%d")
-                
+
             close_val = row.get("close") if "close" in row else row.get("Close")
             vol_val = row.get("volume") if "volume" in row else row.get("Volume")
-            vol_clean = int(vol_val) if vol_val is not None and not math.isnan(float(vol_val)) else 0
-            
-            history_data.append({
-                "date": date_str,
-                "close": round(float(close_val), 2),
-                "volume": vol_clean
-            })
-            
+            vol_clean = (
+                int(vol_val)
+                if vol_val is not None and not math.isnan(float(vol_val))
+                else 0
+            )
+
+            history_data.append(
+                {
+                    "date": date_str,
+                    "close": round(float(close_val), 2),
+                    "volume": vol_clean,
+                }
+            )
+
         history_data.reverse()
-        
+
         payload = {
             "status": "success",
             "ticker": ticker_upper,
             "latest_close": latest_close,
             "latest_volume": latest_volume,
             "volatility_metrics": {
-                "30_day_standard_deviation": round(std_dev, 2)
+                "30_day_standard_deviation": round(std_dev, 2),
             },
-            "thirty_day_trend": history_data
+            "thirty_day_trend": history_data,
         }
-        
+
         return json.dumps(payload, indent=2)
-        
+
     except Exception as e:
-        return json.dumps({"status": "error", "message": f"Failed to retrieve live data: {str(e)}"})
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Failed to retrieve live data: {str(e)}",
+            }
+        )
+
 
 if __name__ == "__main__":
     mcp.run()

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Python Backend
+  # ──────────────────────────────────────────────
+  backend:
+    name: Backend Lint & Import Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify package imports
+        run: |
+          python -c "from src.state import FinancialSwarmState; print('✅ State import OK')"
+          python -c "from schemas import TradeRequest, TradeResponse; print('✅ Schemas import OK')"
+          python -c "from swarm import build_graph; print('✅ Swarm graph import OK')"
+
+  # ──────────────────────────────────────────────
+  # Next.js Frontend
+  # ──────────────────────────────────────────────
+  frontend:
+    name: Frontend Type-check & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: omni-nexus-ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: omni-nexus-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+  # ──────────────────────────────────────────────
+  # Security — Prevent secret leaks
+  # ──────────────────────────────────────────────
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for .env in tracked files
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "❌ FATAL: .env is tracked by Git!"
+            exit 1
+          else
+            echo "✅ .env is not tracked"
+          fi
