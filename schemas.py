@@ -45,6 +45,10 @@ class TradeDirectiveSchema(BaseModel):
             return value
         clean_value = value.upper().strip()
 
+        # Preserve Indian market exchange suffixes (.NS for NSE, .BO for BSE)
+        if clean_value.endswith(".NS") or clean_value.endswith(".BO"):
+            return clean_value
+
         # Alpaca requires slash for crypto
         if "-" in clean_value:
             clean_value = clean_value.replace("-", "/")

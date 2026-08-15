@@ -20,6 +20,7 @@ export interface AssetData {
   volatility: number;
   is_positive: boolean;
   chart_data: ChartDataPoint[];
+  timeframe_data?: Record<string, ChartDataPoint[]>;
 }
 
 // ---- Sentiment / Consensus (from sentiment_server.py) ----

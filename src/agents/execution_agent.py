@@ -28,8 +28,30 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
         return {"messages": [AIMessage(content="Execution Engine: No action taken. Holding position.")]}
 
     if "." in ticker:
+        is_paper = state.get("paper_trading_enabled", True)
+        if is_paper:
+            # Still record paper trade in ledger for Indian market tickers
+            raw_shares = trade.get("shares")
+            shares = float(raw_shares) if raw_shares is not None else 0.0
+            if shares > 0 and live_price > 0:
+                from src.agents.risk_agent import get_ledger_data, save_ledger_data
+                ledger = get_ledger_data()
+                trade_value = shares * live_price
+                if action == "BUY":
+                    ledger["cash"] -= trade_value
+                    ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) + shares
+                elif action == "SELL":
+                    ledger["cash"] += trade_value
+                    ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) - shares
+                    if round(ledger["positions"][ticker], 4) <= 0:
+                        del ledger["positions"][ticker]
+                save_ledger_data(ledger)
+            return {
+                "proposed_trade": trade,
+                "messages": [AIMessage(content=f"Paper Trade Logged: {action} {shares} shares of {ticker} @ ₹{live_price:.2f}. Note: Alpaca broker supports US markets only — this trade was recorded in the paper ledger for tracking.")]
+            }
         return {
-            "messages": [AIMessage(content=f"Execution Engine: Skipping Alpaca submission for international stock '{ticker}'.")]
+            "messages": [AIMessage(content=f"Execution Engine: Skipping Alpaca submission for international stock '{ticker}'. Alpaca supports US markets only.")]
         }
 
     # Trust the Risk Desk's precise share calculation

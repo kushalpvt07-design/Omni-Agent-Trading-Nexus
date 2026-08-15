@@ -48,7 +48,10 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
   }
 
   // Failsafe key extractions — aligned to the backend's actual payload shape from utils.py
-  const data = assetData.chart_data || assetData.chart || assetData.historical_data || [];
+  const timeframeData = assetData.timeframe_data || {};
+  const allChartData = assetData.chart_data || assetData.chart || assetData.historical_data || [];
+  // Use timeframe-specific data if available, otherwise fall back to the default chart_data
+  const data = timeframeData[timeframe] || allChartData;
   const price = assetData.current_price || assetData.price || "0.00";
   const volatility = assetData.volatility || "0.00";
   const changePct = assetData.change_pct;

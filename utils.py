@@ -5,8 +5,25 @@ import logging
 logger = logging.getLogger("omni-nexus.utils")
 
 
+def _build_chart_data(hist):
+    """Convert a DataFrame of historical prices into chart-ready JSON data."""
+    chart_data = []
+    for date, row in hist.iterrows():
+        val = float(row["Close"])
+        chart_data.append(
+            {
+                "time": date.strftime("%d/%m"),
+                "price": round(val, 2) if not math.isnan(val) else 0.0,
+            }
+        )
+    return chart_data
+
+
 def get_live_asset_data(ticker_symbol: str):
     """Fetches live price, change %, volatility, and chart data for a ticker.
+
+    Returns chart data for multiple timeframes (1D, 5D, 15D, 1M, ALL) so the
+    frontend can switch between them without an extra API round-trip.
 
     This is a synchronous function — callers in async contexts should wrap it
     with ``asyncio.to_thread()`` to avoid blocking the event loop.
@@ -15,14 +32,22 @@ def get_live_asset_data(ticker_symbol: str):
         return None
 
     ticker_upper = ticker_symbol.upper().strip()
-    clean_ticker = ticker_upper.replace("/", "-")
+
+    # Preserve Indian market exchange suffixes (.NS for NSE, .BO for BSE)
+    is_indian_market = ticker_upper.endswith(".NS") or ticker_upper.endswith(".BO")
+
+    if is_indian_market:
+        clean_ticker = ticker_upper  # Keep as-is for Yahoo Finance
+    else:
+        clean_ticker = ticker_upper.replace("/", "-")
 
     try:
         ticker = yf.Ticker(clean_ticker)
         hist = ticker.history(period="1mo")
 
         # Smart fallback for crypto: if empty, try adding the -USD suffix
-        if hist.empty and "-" not in clean_ticker:
+        # (skip for Indian market tickers which already have their exchange suffix)
+        if hist.empty and not is_indian_market and "-" not in clean_ticker:
             crypto_ticker = f"{clean_ticker}-USD"
             ticker = yf.Ticker(crypto_ticker)
             hist = ticker.history(period="1mo")
@@ -50,15 +75,35 @@ def get_live_asset_data(ticker_symbol: str):
         if math.isnan(volatility):
             volatility = 0.0
 
-        chart_data = []
-        for date, row in hist.iterrows():
-            val = float(row["Close"])
-            chart_data.append(
-                {
-                    "time": date.strftime("%b %d"),
-                    "price": round(val, 2) if not math.isnan(val) else 0.0,
-                }
-            )
+        # Build chart data for the default 1M period
+        chart_data = _build_chart_data(hist)
+
+        # Build chart data for all supported timeframes
+        timeframe_data = {
+            "1M": chart_data,  # Already have this from the main query
+        }
+
+        # Slice the existing 1M history for shorter timeframes
+        if len(hist) >= 1:
+            timeframe_data["1D"] = _build_chart_data(hist.iloc[-1:])
+        if len(hist) >= 5:
+            timeframe_data["5D"] = _build_chart_data(hist.iloc[-5:])
+        else:
+            timeframe_data["5D"] = chart_data
+        if len(hist) >= 15:
+            timeframe_data["15D"] = _build_chart_data(hist.iloc[-15:])
+        else:
+            timeframe_data["15D"] = chart_data
+
+        # Fetch extended history for ALL (max available data)
+        try:
+            hist_all = ticker.history(period="1y")
+            if not hist_all.empty:
+                timeframe_data["ALL"] = _build_chart_data(hist_all)
+            else:
+                timeframe_data["ALL"] = chart_data
+        except Exception:
+            timeframe_data["ALL"] = chart_data
 
         return {
             "ticker": clean_ticker,
@@ -67,6 +112,7 @@ def get_live_asset_data(ticker_symbol: str):
             "volatility": round(volatility, 2),
             "is_positive": change_pct >= 0,
             "chart_data": chart_data,
+            "timeframe_data": timeframe_data,
         }
     except Exception as e:
         logger.warning("Error fetching asset data for %s: %s", ticker_symbol, e)
