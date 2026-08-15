@@ -44,6 +44,21 @@ export interface CheckpointData {
   shares: number | string;
 }
 
+// ---- Portfolio Ledger (from portfolio_ledger.json) ----
+
+export interface PortfolioPosition {
+  ticker: string;
+  shares: number;
+  current_price: number;
+  market_value: number;
+}
+
+export interface PortfolioData {
+  cash: number;
+  total_value: number;
+  positions: PortfolioPosition[];
+}
+
 // ---- WebSocket Log Entry ----
 
 export interface LogMessage {
@@ -63,4 +78,5 @@ export interface SwarmState {
   assetData: AssetData | null;
   sentimentData: SentimentData | null;
   pendingCheckpoint: CheckpointData | null;
+  portfolioData: PortfolioData | null;
 }

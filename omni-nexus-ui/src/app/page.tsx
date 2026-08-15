@@ -6,7 +6,7 @@ import SwarmDirectiveInput from "@/components/SwarmDirectiveInput";
 import AssetIntelligence from "@/components/AssetIntelligence";
 import MarketPulse from "@/components/MarketPulse";
 import SwarmConsensus from "@/components/SwarmConsensus";
-import NexusPipelineLog from "@/components/NexusPipelineLog";
+import PortfolioLedger from "@/components/PortfolioLedger";
 import HumanInTheLoopModal from "@/components/HumanInTheLoopModal";
 import { Activity, Zap, Shield } from "lucide-react";
 
@@ -95,7 +95,7 @@ export default function OmniAgentNexus() {
               />
             </div>
             <div className="animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-              <NexusPipelineLog logs={state.directiveLogs} />
+              <PortfolioLedger portfolioData={state.portfolioData} />
             </div>
           </div>
 

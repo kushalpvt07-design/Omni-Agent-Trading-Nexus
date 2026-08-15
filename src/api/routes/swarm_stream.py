@@ -21,6 +21,7 @@ from src.core.config import logger, audit_logger
 from src.core.security import sanitize_raw_input
 from src.api.middleware.auth import verify_ws_token
 from src.persistence.checkpointer import get_checkpointer
+from src.agents.risk_agent import get_ledger_data
 
 router = APIRouter(tags=["Trading"])
 
@@ -178,6 +179,17 @@ async def websocket_endpoint(
                         "content": "Transaction cycle closed.",
                     }
                 )
+
+                # Push updated portfolio to frontend
+                try:
+                    ledger = get_ledger_data()
+                    await websocket.send_json({
+                        "type": "portfolio_update",
+                        "data": ledger,
+                    })
+                except Exception:
+                    pass
+
                 active_thread_id = None
                 continue
 
@@ -393,6 +405,17 @@ async def websocket_endpoint(
                         "content": "✅ Swarm pipeline execution cycle finished.",
                     }
                 )
+
+                # Push updated portfolio to frontend
+                try:
+                    ledger = get_ledger_data()
+                    await websocket.send_json({
+                        "type": "portfolio_update",
+                        "data": ledger,
+                    })
+                except Exception:
+                    pass
+
                 active_thread_id = None
 
     except (WebSocketDisconnect, RuntimeError):

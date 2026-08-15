@@ -22,7 +22,7 @@ from src.core.config import settings, logger
 from src.persistence.checkpointer import set_checkpointer
 
 # ── Route Imports ───────────────────────────────────────────────
-from src.api.routes import health, analyze, swarm_stream
+from src.api.routes import health, analyze, swarm_stream, portfolio
 
 
 # ── Application Lifespan ────────────────────────────────────────
@@ -56,3 +56,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(swarm_stream.router)
+app.include_router(portfolio.router)

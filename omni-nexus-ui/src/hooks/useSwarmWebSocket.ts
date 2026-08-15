@@ -3,6 +3,7 @@ import type {
   AssetData,
   SentimentData,
   CheckpointData,
+  PortfolioData,
   LogMessage,
   SwarmState,
 } from "@/types/swarm";
@@ -21,6 +22,7 @@ export function useSwarmWebSocket(url: string, token?: string) {
     assetData: null,
     sentimentData: null,
     pendingCheckpoint: null,
+    portfolioData: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -46,6 +48,14 @@ export function useSwarmWebSocket(url: string, token?: string) {
     ws.onopen = () => {
       reconnectAttemptRef.current = 0;
       setState((prev) => ({ ...prev, isConnected: true }));
+
+      // Fetch initial portfolio data via REST
+      fetch("http://127.0.0.1:8000/api/v1/portfolio")
+        .then((res) => res.json())
+        .then((data: PortfolioData) => {
+          setState((prev) => ({ ...prev, portfolioData: data }));
+        })
+        .catch(() => {});
     };
 
     ws.onclose = () => {
@@ -121,6 +131,17 @@ export function useSwarmWebSocket(url: string, token?: string) {
             ...prev,
             pendingCheckpoint: payload.trade_details as CheckpointData,
           }));
+        }
+
+        // Portfolio update after trade execution
+        if (payload.type === "portfolio_update") {
+          // Fetch full portfolio with live prices from REST
+          fetch("http://127.0.0.1:8000/api/v1/portfolio")
+            .then((res) => res.json())
+            .then((data: PortfolioData) => {
+              setState((prev) => ({ ...prev, portfolioData: data }));
+            })
+            .catch(() => {});
         }
       } catch (err) {
         console.error("Failed to parse WebSocket message:", err);
