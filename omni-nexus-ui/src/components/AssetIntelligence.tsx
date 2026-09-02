@@ -11,7 +11,6 @@ import {
   CartesianGrid,
   Tooltip,
   Cell,
-  ReferenceLine,
 } from "recharts";
 
 /* ── colour palette ───────────────────────────────────────────────── */
@@ -31,20 +30,21 @@ const TIMEFRAME_COLORS: Record<string, { bull: string; bear: string; label: stri
 
 /* ── helpers ──────────────────────────────────────────────────────── */
 
-/** Enrich data points with candlestick-specific computed fields */
-function enrichCandleData(data: any[]) {
-  return data.map((d, i) => {
+/**
+ * Enrich data points with candlestick fields.
+ *
+ * Each point gets `_domainMin` embedded — the Y-axis domain minimum.
+ * The custom bar shape uses this plus the bar's rendered y/height
+ * (which maps to `high` → `_domainMin`) to derive pixelsPerUnit
+ * and position open/close/low correctly.
+ */
+function enrichCandleData(data: any[], domainMin: number) {
+  return data.map((d) => {
     const open = d.open ?? d.price;
     const close = d.close ?? d.price;
     const high = d.high ?? Math.max(open, close);
     const low = d.low ?? Math.min(open, close);
     const isBull = close >= open;
-
-    // The bar spans from open to close (body)
-    const bodyLow = Math.min(open, close);
-    const bodyHigh = Math.max(open, close);
-    // Ensure body has at least a tiny height so doji candles are visible
-    const bodyHeight = bodyHigh - bodyLow || 0.001;
 
     return {
       ...d,
@@ -53,92 +53,86 @@ function enrichCandleData(data: any[]) {
       high,
       low,
       isBull,
-      // For the bar: we use a trick — bar starts at bodyLow with height bodyHeight
-      bodyLow,
-      bodyHeight,
-      wickHigh: high,
-      wickLow: low,
+      _domainMin: domainMin,
     };
   });
 }
 
-/* ── custom candlestick shape ─────────────────────────────────────── */
-
-interface CandleShapeProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  payload?: any;
-  yAxis?: any;
-  background?: any;
+/** Compute Y-axis domain with padding from raw OHLC data */
+function computeDomain(data: any[]) {
+  if (!data || data.length === 0) return { minY: 0, maxY: 0, yPad: 1, domainMin: 0 };
+  const lows = data.map((d) => d.low ?? d.close ?? d.price ?? 0);
+  const highs = data.map((d) => d.high ?? d.open ?? d.price ?? 0);
+  const minY = Math.min(...lows);
+  const maxY = Math.max(...highs);
+  const yPad = (maxY - minY) * 0.08 || 1;
+  return { minY, maxY, yPad, domainMin: minY - yPad };
 }
 
-function CandleShape(props: CandleShapeProps) {
-  const { x = 0, width = 0, payload } = props;
+/* ── custom candlestick bar shape ─────────────────────────────────── */
+
+/**
+ * Recharts renders a single Bar from the Y-axis domain minimum up to `high`.
+ * Props received: x, y (pixel top = high), width, height (pixels from high to domainMin).
+ *
+ * We derive: pixelsPerUnit = height / (high - domainMin)
+ * Then for any OHLC value V: pixelY = y + (high - V) * pixelsPerUnit
+ */
+function CandleShape(props: any) {
+  const { x = 0, y: barY = 0, width = 0, height: barH = 0, payload } = props;
   if (!payload) return null;
 
-  const { open, close, high, low, isBull } = payload;
-  const bodyLow = Math.min(open, close);
-  const bodyHigh = Math.max(open, close);
+  const { open, close, high, low, isBull, _domainMin } = payload;
 
-  // We need access to the Y-axis scale. Recharts passes it indirectly via 
-  // the y, height props which map to bodyLow and bodyHeight in data coords.
-  // We can compute the y scale factor from the bar's rendered y & height vs data values.
-  const bodyDataHeight = bodyHigh - bodyLow || 0.001;
-  const renderedY = props.y ?? 0;
-  const renderedH = Math.max(Math.abs(props.height ?? 0), 1); // ensure min 1px body
+  // Derive the pixel scale from what Recharts gave us
+  const dataRange = high - _domainMin;
+  if (dataRange <= 0 || barH <= 0) return null;
+  const ppu = barH / dataRange; // pixels per unit of price
 
-  const pixelsPerUnit = renderedH / bodyDataHeight;
+  // Convert data values to pixel Y
+  const toY = (val: number) => barY + (high - val) * ppu;
 
-  // Wick coordinates  
-  const wickTopY = renderedY - (high - bodyHigh) * pixelsPerUnit;
-  const wickBottomY = renderedY + renderedH + (bodyLow - low) * pixelsPerUnit;
+  const bodyTopVal = Math.max(open, close);
+  const bodyBotVal = Math.min(open, close);
+
+  const wickTopY = toY(high);
+  const wickBotY = toY(low);
+  const bodyTopY = toY(bodyTopVal);
+  const bodyBotY = toY(bodyBotVal);
+
+  const bodyH = Math.max(bodyBotY - bodyTopY, 1);
+  const wickH = Math.max(wickBotY - wickTopY, 0.5);
 
   const centerX = x + width / 2;
-  const wickWidth = Math.max(1, width * 0.12);
-  const bodyWidth = Math.max(2, width * 0.65);
-  const bodyX = centerX - bodyWidth / 2;
+  const wickW = Math.max(1, width * 0.12);
+  const bodyW = Math.max(2, width * 0.6);
 
   const fillColor = isBull ? BULL_COLOR : BEAR_COLOR;
   const fillColorDim = isBull ? BULL_COLOR_DIM : BEAR_COLOR_DIM;
-  const isDoji = Math.abs(open - close) < 0.001;
+  const isDoji = Math.abs(open - close) < 0.01;
 
   return (
     <g>
-      {/* Wick (shadow) */}
+      {/* Wick (high→low shadow line) */}
       <rect
-        x={centerX - wickWidth / 2}
+        x={centerX - wickW / 2}
         y={wickTopY}
-        width={wickWidth}
-        height={Math.max(wickBottomY - wickTopY, 0.5)}
+        width={wickW}
+        height={wickH}
         fill={isDoji ? DOJI_COLOR : fillColor}
         rx={0.5}
         opacity={0.7}
       />
-      {/* Body */}
+      {/* Body (open→close) */}
       <rect
-        x={bodyX}
-        y={renderedY}
-        width={bodyWidth}
-        height={Math.max(renderedH, 1)}
-        fill={isDoji ? DOJI_COLOR : (isBull ? fillColorDim : fillColor)}
+        x={centerX - bodyW / 2}
+        y={bodyTopY}
+        width={bodyW}
+        height={bodyH}
+        fill={isDoji ? DOJI_COLOR : isBull ? fillColorDim : fillColor}
         stroke={isDoji ? DOJI_COLOR : fillColor}
         strokeWidth={1}
         rx={1}
-      />
-      {/* Glow effect on hover-friendly candles */}
-      <rect
-        x={bodyX - 1}
-        y={renderedY - 1}
-        width={bodyWidth + 2}
-        height={Math.max(renderedH, 1) + 2}
-        fill="none"
-        stroke={fillColor}
-        strokeWidth={0}
-        rx={2}
-        className="transition-all duration-200"
-        opacity={0}
       />
     </g>
   );
@@ -187,6 +181,69 @@ function CandleTooltip({ active, payload, label, currencySymbol }: any) {
   return null;
 }
 
+/* ── Reusable candlestick chart ──────────────────────────────────── */
+
+function CandlestickChartInner({
+  data,
+  domainMin,
+  domainMax,
+  currencySymbol,
+  showXAxis = true,
+}: {
+  data: any[];
+  domainMin: number;
+  domainMax: number;
+  currencySymbol: string;
+  showXAxis?: boolean;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: showXAxis ? 4 : 0 }}>
+        <CartesianGrid
+          strokeDasharray="3 3"
+          stroke="rgba(51, 65, 85, 0.12)"
+          vertical={false}
+        />
+        {showXAxis && (
+          <XAxis
+            dataKey="time"
+            tick={{ fill: "#475569", fontSize: 9, fontFamily: "var(--font-mono)" }}
+            axisLine={false}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+        )}
+        <YAxis
+          domain={[domainMin, domainMax]}
+          hide
+        />
+        <Tooltip
+          content={<CandleTooltip currencySymbol={currencySymbol} />}
+          cursor={{
+            stroke: "rgba(45, 212, 191, 0.12)",
+            strokeWidth: 1,
+            strokeDasharray: "4 4",
+          }}
+        />
+        {/* Single bar from domainMin to high — CandleShape draws
+            the actual wick + body using the pixel scale it derives */}
+        <Bar
+          dataKey="high"
+          isAnimationActive={false}
+          shape={(props: any) => <CandleShape {...props} />}
+        >
+          {data.map((entry: any, idx: number) => (
+            <Cell
+              key={idx}
+              fill={entry.isBull ? BULL_COLOR : BEAR_COLOR}
+            />
+          ))}
+        </Bar>
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
 /* ── mini candlestick chart for ALL view ──────────────────────────── */
 
 function MiniCandleChart({
@@ -200,7 +257,14 @@ function MiniCandleChart({
   title: string;
   currencySymbol: string;
 }) {
-  const enriched = useMemo(() => enrichCandleData(data), [data]);
+  const { enriched, domainMin, domainMax } = useMemo(() => {
+    const dom = computeDomain(data);
+    return {
+      enriched: enrichCandleData(data, dom.domainMin),
+      domainMin: dom.domainMin,
+      domainMax: dom.maxY + dom.yPad,
+    };
+  }, [data]);
 
   return (
     <div className="flex flex-col rounded-lg bg-[#030508]/80 border border-slate-800/30 p-2 h-full">
@@ -216,23 +280,13 @@ function MiniCandleChart({
             <span className="text-[8px] font-mono text-slate-600">No data</span>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={enriched} margin={{ top: 4, right: 2, left: 0, bottom: 0 }}>
-              <YAxis domain={["auto", "auto"]} hide dataKey="bodyLow" />
-              <Tooltip content={<CandleTooltip currencySymbol={currencySymbol} />} />
-              <Bar
-                dataKey="bodyHeight"
-                stackId="candle"
-                isAnimationActive={true}
-                animationDuration={600}
-                shape={(props: any) => <CandleShape {...props} />}
-              >
-                {enriched.map((entry, idx) => (
-                  <Cell key={idx} fill={entry.isBull ? colors.bull : colors.bear} />
-                ))}
-              </Bar>
-            </ComposedChart>
-          </ResponsiveContainer>
+          <CandlestickChartInner
+            data={enriched}
+            domainMin={domainMin}
+            domainMax={domainMax}
+            currencySymbol={currencySymbol}
+            showXAxis={false}
+          />
         )}
       </div>
     </div>
@@ -277,7 +331,11 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
   const timeframeData = assetData.timeframe_data || {};
   const allChartData = assetData.chart_data || assetData.chart || assetData.historical_data || [];
   const rawData = timeframeData[timeframe] || allChartData;
-  const data = enrichCandleData(rawData);
+
+  /* ---------- Y-axis domain (padded) ---------- */
+  const { minY, maxY, yPad, domainMin } = computeDomain(rawData);
+  const domainMax = maxY + yPad;
+  const data = enrichCandleData(rawData, domainMin);
 
   const price = assetData.current_price || assetData.price || "0.00";
   const volatility = assetData.volatility || "0.00";
@@ -297,13 +355,6 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
       : Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const isAllView = timeframe === "ALL";
-
-  /* ---------- Y-axis domain (padded) ---------- */
-  const allLows = data.map((d: any) => d.low);
-  const allHighs = data.map((d: any) => d.high);
-  const minY = Math.min(...allLows);
-  const maxY = Math.max(...allHighs);
-  const yPad = (maxY - minY) * 0.08 || 1;
 
   return (
     <div className="w-full h-full rounded-2xl glass-card gradient-border p-5 flex flex-col group">
@@ -358,64 +409,13 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
             <span className="text-[10px] font-mono uppercase tracking-widest text-slate-600">No Chart Data In Payload</span>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 4 }}>
-              <defs>
-                <linearGradient id="gridFade" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(51, 65, 85, 0.12)" />
-                  <stop offset="100%" stopColor="rgba(51, 65, 85, 0.03)" />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="rgba(51, 65, 85, 0.12)"
-                vertical={false}
-              />
-              <XAxis
-                dataKey="time"
-                tick={{ fill: "#475569", fontSize: 9, fontFamily: "var(--font-mono)" }}
-                axisLine={false}
-                tickLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                domain={[minY - yPad, maxY + yPad]}
-                hide
-                dataKey="bodyLow"
-              />
-              <Tooltip
-                content={<CandleTooltip currencySymbol={currencySymbol} />}
-                cursor={{
-                  stroke: "rgba(45, 212, 191, 0.12)",
-                  strokeWidth: 1,
-                  strokeDasharray: "4 4",
-                }}
-              />
-              {/* Invisible baseline bar to push candle bodies to correct Y position */}
-              <Bar
-                dataKey="bodyLow"
-                stackId="candle"
-                fill="transparent"
-                isAnimationActive={false}
-              />
-              {/* Candlestick body + wick */}
-              <Bar
-                dataKey="bodyHeight"
-                stackId="candle"
-                isAnimationActive={true}
-                animationDuration={1000}
-                animationEasing="ease-out"
-                shape={(props: any) => <CandleShape {...props} />}
-              >
-                {data.map((entry: any, idx: number) => (
-                  <Cell
-                    key={idx}
-                    fill={entry.isBull ? BULL_COLOR : BEAR_COLOR}
-                  />
-                ))}
-              </Bar>
-            </ComposedChart>
-          </ResponsiveContainer>
+          <CandlestickChartInner
+            data={data}
+            domainMin={domainMin}
+            domainMax={domainMax}
+            currencySymbol={currencySymbol}
+            showXAxis={true}
+          />
         )}
       </div>
 
