@@ -6,14 +6,25 @@ logger = logging.getLogger("omni-nexus.utils")
 
 
 def _build_chart_data(hist, time_format="%d/%m"):
-    """Convert a DataFrame of historical prices into chart-ready JSON data."""
+    """Convert a DataFrame of historical prices into chart-ready JSON data.
+
+    Includes OHLC (open, high, low, close) fields for candlestick rendering
+    alongside the legacy ``price`` key for backward compatibility.
+    """
     chart_data = []
     for date, row in hist.iterrows():
-        val = float(row["Close"])
+        close_val = float(row["Close"])
+        open_val = float(row["Open"]) if "Open" in row and not math.isnan(float(row["Open"])) else close_val
+        high_val = float(row["High"]) if "High" in row and not math.isnan(float(row["High"])) else close_val
+        low_val = float(row["Low"]) if "Low" in row and not math.isnan(float(row["Low"])) else close_val
         chart_data.append(
             {
                 "time": date.strftime(time_format),
-                "price": round(val, 2) if not math.isnan(val) else 0.0,
+                "price": round(close_val, 2) if not math.isnan(close_val) else 0.0,
+                "open": round(open_val, 2),
+                "high": round(high_val, 2),
+                "low": round(low_val, 2),
+                "close": round(close_val, 2) if not math.isnan(close_val) else 0.0,
             }
         )
     return chart_data
