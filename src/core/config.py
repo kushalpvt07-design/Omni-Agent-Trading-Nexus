@@ -66,3 +66,12 @@ if not settings.NEXUS_API_SECRET:
         "NEXUS_API_SECRET is not set — all endpoints are UNPROTECTED. "
         "Set this variable in .env to enable authentication."
     )
+
+# Startup warning if Alpaca trading credentials are missing
+if not settings.ALPACA_API_KEY or not settings.ALPACA_SECRET_KEY:
+    logger.warning(
+        "ALPACA_API_KEY / ALPACA_SECRET_KEY not set — the quant agent and "
+        "execution engine will fail with AUTH_ERROR. "
+        "Set these variables in .env with valid Alpaca credentials."
+    )
+
