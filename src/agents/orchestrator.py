@@ -31,10 +31,27 @@ async def _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_conte
 
 async def orchestrator_node(state: FinancialSwarmState) -> dict:
     if state.get("errors"):
+        upstream_errors = state.get("errors", [])
+        error_summary = "\n".join(f"• {e}" for e in upstream_errors)
         return {
+            "proposed_trade": {
+                "ticker": state.get("current_ticker", "UNKNOWN"),
+                "action": "REJECT",
+                "allocation": None,
+                "shares": None,
+                "estimated_price": 0.0,
+                "reasoning": f"Rejected due to upstream errors: {error_summary}",
+            },
             "messages": [
-                AIMessage(content="🚨 Orchestrator skipped due to upstream errors.")
-            ]
+                AIMessage(
+                    content=(
+                        f"🚨 **Orchestrator: Analysis Halted**\n\n"
+                        f"The swarm encountered errors before reaching the orchestrator:\n"
+                        f"{error_summary}\n\n"
+                        f"**Action:** REJECT — No trade will be executed."
+                    )
+                )
+            ],
         }
 
     user_request = "No request."
