@@ -12,7 +12,7 @@ import { Activity, Zap, Shield } from "lucide-react";
 
 export default function OmniAgentNexus() {
   const { state, deployDirective, resolveCheckpoint } = useSwarmWebSocket(
-    "ws://127.0.0.1:8000/api/v1/swarm-stream",
+    "ws://localhost:8000/api/v1/swarm-stream",
     process.env.NEXT_PUBLIC_NEXUS_API_SECRET
   );
 

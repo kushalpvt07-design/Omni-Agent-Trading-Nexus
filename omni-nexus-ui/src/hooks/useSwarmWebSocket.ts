@@ -50,7 +50,7 @@ export function useSwarmWebSocket(url: string, token?: string) {
       setState((prev) => ({ ...prev, isConnected: true }));
 
       // Fetch initial portfolio data via REST
-      fetch("http://127.0.0.1:8000/api/v1/portfolio")
+      fetch("http://localhost:8000/api/v1/portfolio")
         .then((res) => res.json())
         .then((data: PortfolioData) => {
           setState((prev) => ({ ...prev, portfolioData: data }));
@@ -136,7 +136,7 @@ export function useSwarmWebSocket(url: string, token?: string) {
         // Portfolio update after trade execution
         if (payload.type === "portfolio_update") {
           // Fetch full portfolio with live prices from REST
-          fetch("http://127.0.0.1:8000/api/v1/portfolio")
+          fetch("http://localhost:8000/api/v1/portfolio")
             .then((res) => res.json())
             .then((data: PortfolioData) => {
               setState((prev) => ({ ...prev, portfolioData: data }));
