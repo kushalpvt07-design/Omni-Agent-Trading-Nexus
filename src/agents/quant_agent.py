@@ -3,7 +3,12 @@ import json
 import logging
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_not_exception_type,
+)
 from src.state import FinancialSwarmState
 
 logger = logging.getLogger("omni-nexus.quant")
@@ -21,9 +26,7 @@ class AlpacaAuthError(Exception):
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True,
-    retry=lambda retry_state: not isinstance(
-        retry_state.outcome.exception(), AlpacaAuthError
-    ) if retry_state.outcome and retry_state.outcome.failed else True,
+    retry=retry_if_not_exception_type(AlpacaAuthError),
 )
 async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
     server_params = StdioServerParameters(
@@ -58,8 +61,10 @@ async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
                         raise AlpacaAuthError(
                             f"[{error_code}] {error_msg}"
                         )
-                    # For other errors (NO_DATA, DATA_CORRUPT, DATA_FETCH_ERROR),
-                    # return the raw JSON so the orchestrator can read the details.
+                    # Retryable server errors — raise so tenacity can retry
+                    raise RuntimeError(f"[{error_code}] {error_msg}")
+            except AlpacaAuthError:
+                raise  # Propagate non-retryable errors immediately
             except (json.JSONDecodeError, TypeError):
                 pass  # Not JSON — return as-is
 
