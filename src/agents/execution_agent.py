@@ -116,8 +116,37 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
             "messages": [AIMessage(content=f"Order executed ({mode}): {action} {shares} shares of {ticker}. Alpaca Order ID: {order.id}. Ledger Updated.")],
         }
     except Exception as e:
+        error_str = str(e).lower()
+        is_auth = any(
+            s in error_str for s in ("401", "403", "unauthorized", "forbidden")
+        )
+
+        if is_auth:
+            logger.error(
+                "AUTH_ERROR during execution for %s %s %s — "
+                "regenerate Alpaca keys at https://app.alpaca.markets/",
+                action, shares, ticker,
+            )
+            return {
+                "errors": [
+                    f"Execution Engine AUTH_ERROR: Alpaca rejected credentials "
+                    f"while submitting {action} {shares} {ticker}. "
+                    f"Regenerate your API keys and update the .env file."
+                ],
+                "messages": [AIMessage(
+                    content=(
+                        f"🚨 **Execution Engine: Authentication Failed**\n\n"
+                        f"Alpaca rejected your API credentials (HTTP 401/403) "
+                        f"when attempting to submit: **{action} {shares} shares of {ticker}**.\n\n"
+                        f"**Fix:** Regenerate your API keys at https://app.alpaca.markets/ "
+                        f"and update `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in your `.env` file."
+                    )
+                )],
+            }
+
         logger.exception("Alpaca API Error for %s %s %s", action, shares, ticker)
         return {
             "errors": [f"Alpaca API Error: {str(e)}"],
             "messages": [AIMessage(content=f"Alpaca API Error: {str(e)}")],
         }
+
