@@ -20,6 +20,38 @@ secret_key = os.environ.get("ALPACA_SECRET_KEY")
 mcp = FastMCP("QuantServer")
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Detect HTTP 401/403 authentication failures from Alpaca SDK exceptions.
+
+    The Alpaca SDK wraps HTTP errors in various exception types across versions.
+    This helper inspects the exception chain to reliably detect auth failures
+    regardless of SDK version.
+    """
+    error_str = str(exc).lower()
+
+    # Direct status-code mentions in the exception message
+    if any(code in error_str for code in ("401", "403", "unauthorized", "forbidden")):
+        return True
+
+    # Alpaca SDK may expose the HTTP status via a `status_code` attribute
+    if hasattr(exc, "status_code") and getattr(exc, "status_code", None) in (401, 403):
+        return True
+
+    # Walk the exception chain (e.g. HTTPError wrapped inside an SDK error)
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause is not None:
+        cause_str = str(cause).lower()
+        if any(code in cause_str for code in ("401", "403", "unauthorized", "forbidden")):
+            return True
+        if hasattr(cause, "response"):
+            resp = getattr(cause, "response", None)
+            if resp is not None and hasattr(resp, "status_code"):
+                if resp.status_code in (401, 403):
+                    return True
+
+    return False
+
+
 @mcp.tool()
 def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
     ticker_upper = ticker.upper().strip()
@@ -28,7 +60,22 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         return json.dumps(
             {
                 "status": "error",
+                "error_code": "INVALID_TICKER",
                 "message": "Invalid ticker symbol format. Must be 1-20 characters.",
+            }
+        )
+
+    # ── Fast-fail: validate credentials before making any API call ───
+    if not api_key or not secret_key:
+        logger.error("Alpaca API credentials are missing from environment variables.")
+        return json.dumps(
+            {
+                "status": "error",
+                "error_code": "AUTH_ERROR",
+                "message": (
+                    "Alpaca API credentials are not configured. "
+                    "Set ALPACA_API_KEY and ALPACA_SECRET_KEY in your .env file."
+                ),
             }
         )
 
@@ -58,6 +105,7 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             return json.dumps(
                 {
                     "status": "error",
+                    "error_code": "NO_DATA",
                     "message": f"No data found for ticker {ticker_upper}.",
                 }
             )
@@ -74,6 +122,7 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             return json.dumps(
                 {
                     "status": "error",
+                    "error_code": "DATA_CORRUPT",
                     "message": f"DATA_CORRUPT: Live price ({latest_close}) deviates from 30-day SMA ({sma}) by > 50%. Possible proxy mismatch or split anomaly.",
                 }
             )
@@ -115,13 +164,35 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         return json.dumps(payload, indent=2)
 
     except Exception as e:
+        # ── Classify the failure for upstream agents ──────────────────
+        if _is_auth_error(e):
+            logger.error(
+                "AUTH_ERROR for %s: Alpaca rejected credentials (HTTP 401/403). "
+                "Regenerate your API keys at https://app.alpaca.markets/",
+                ticker_upper,
+            )
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error_code": "AUTH_ERROR",
+                    "message": (
+                        f"Alpaca authentication failed for {ticker_upper} (HTTP 401/403). "
+                        "Your API keys may be expired, revoked, or incorrectly configured. "
+                        "Regenerate them at https://app.alpaca.markets/ and update your .env file."
+                    ),
+                }
+            )
+
+        logger.exception("Quant server error fetching data for %s", ticker_upper)
         return json.dumps(
             {
                 "status": "error",
-                "message": f"Failed to retrieve live data: {str(e)}",
+                "error_code": "DATA_FETCH_ERROR",
+                "message": f"Failed to retrieve live data for {ticker_upper}: {str(e)}",
             }
         )
 
 
 if __name__ == "__main__":
     mcp.run()
+
