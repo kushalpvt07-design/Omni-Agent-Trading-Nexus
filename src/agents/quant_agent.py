@@ -1,4 +1,5 @@
 import sys
+import json
 import logging
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -7,11 +8,22 @@ from src.state import FinancialSwarmState
 
 logger = logging.getLogger("omni-nexus.quant")
 
+# Error codes that should NOT be retried (permanent failures)
+_NON_RETRYABLE_ERRORS = {"AUTH_ERROR", "INVALID_TICKER"}
+
+
+class AlpacaAuthError(Exception):
+    """Raised when Alpaca returns a 401/403 — retrying won't help."""
+    pass
+
 
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True,
+    retry=lambda retry_state: not isinstance(
+        retry_state.outcome.exception(), AlpacaAuthError
+    ) if retry_state.outcome and retry_state.outcome.failed else True,
 )
 async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
     server_params = StdioServerParameters(
@@ -30,9 +42,28 @@ async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
                 raise RuntimeError(f"MCP Server Internal Error: {result.content}")
 
             if isinstance(result.content, list):
-                return result.content[0].text if len(result.content) > 0 else "{}"
+                raw_text = result.content[0].text if len(result.content) > 0 else "{}"
+            else:
+                raw_text = str(result.content)
 
-            return str(result.content)
+            # Parse structured errors from the quant server and raise typed
+            # exceptions so the retry decorator can decide whether to retry.
+            try:
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict) and parsed.get("status") == "error":
+                    error_code = parsed.get("error_code", "UNKNOWN")
+                    error_msg = parsed.get("message", "Unknown quant server error.")
+
+                    if error_code in _NON_RETRYABLE_ERRORS:
+                        raise AlpacaAuthError(
+                            f"[{error_code}] {error_msg}"
+                        )
+                    # For other errors (NO_DATA, DATA_CORRUPT, DATA_FETCH_ERROR),
+                    # return the raw JSON so the orchestrator can read the details.
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not JSON — return as-is
+
+            return raw_text
 
 
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
@@ -57,5 +88,16 @@ async def quant_agent_node(state: FinancialSwarmState) -> dict:
             text_content = "{}"
 
         return {"quant_data": {ticker: text_content}}
+
+    except AlpacaAuthError as e:
+        logger.error("Alpaca auth failure for %s — not retrying: %s", ticker, e)
+        return {
+            "errors": [
+                f"Quant Agent [{ticker}]: {str(e)} — "
+                "Please regenerate your Alpaca API keys and update the .env file."
+            ]
+        }
     except Exception as e:
-        return {"errors": [f"Quant Server Error: {str(e)}"]}
+        logger.exception("Quant agent error for %s", ticker)
+        return {"errors": [f"Quant Server Error [{ticker}]: {str(e)}"]}
+
