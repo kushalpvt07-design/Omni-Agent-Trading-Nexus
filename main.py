@@ -22,12 +22,15 @@ from src.core.config import settings, logger
 from src.persistence.checkpointer import set_checkpointer
 
 # ── Route Imports ───────────────────────────────────────────────
-from src.api.routes import health, analyze, swarm_stream, portfolio
+from src.api.routes import health, analyze, swarm_stream, portfolio, auth
+from src.persistence.database import init_database
 
 
 # ── Application Lifespan ────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize user database (creates tables if needed)
+    init_database()
     async with AsyncSqliteSaver.from_conn_string(settings.CHECKPOINT_DB) as checkpointer:
         await checkpointer.setup()
         set_checkpointer(checkpointer)
@@ -54,6 +57,7 @@ app.add_middleware(
 
 # ── Register Routes ─────────────────────────────────────────────
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(analyze.router)
 app.include_router(swarm_stream.router)
 app.include_router(portfolio.router)

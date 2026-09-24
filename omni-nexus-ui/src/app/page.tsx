@@ -1,20 +1,51 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useSwarmWebSocket } from "@/hooks/useSwarmWebSocket";
+import { isAuthenticated, getToken, getUser, clearAuth, AuthUser } from "@/lib/auth";
 import SwarmDirectiveInput from "@/components/SwarmDirectiveInput";
 import AssetIntelligence from "@/components/AssetIntelligence";
 import MarketPulse from "@/components/MarketPulse";
 import SwarmConsensus from "@/components/SwarmConsensus";
 import PortfolioLedger from "@/components/PortfolioLedger";
 import HumanInTheLoopModal from "@/components/HumanInTheLoopModal";
-import { Activity, Zap, Shield } from "lucide-react";
+import { Activity, Zap, Shield, LogOut, User } from "lucide-react";
 
 export default function OmniAgentNexus() {
+  const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    if (!isAuthenticated()) {
+      router.replace("/login");
+      return;
+    }
+    setToken(getToken());
+    setUser(getUser());
+  }, [router]);
+
   const { state, deployDirective, resolveCheckpoint } = useSwarmWebSocket(
     "ws://localhost:8000/api/v1/swarm-stream",
-    process.env.NEXT_PUBLIC_NEXUS_API_SECRET
+    token || undefined
   );
+
+  const handleLogout = () => {
+    clearAuth();
+    router.replace("/login");
+  };
+
+  // Don't render until client-side hydration is complete and auth is confirmed
+  if (!mounted || !token || !user) {
+    return (
+      <div className="min-h-screen bg-[#050810] flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-teal-500/30 border-t-teal-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#050810] text-slate-200 font-sans relative overflow-x-hidden selection:bg-teal-500/30">
@@ -49,12 +80,18 @@ export default function OmniAgentNexus() {
                 Omni-Agent Trading <span className="text-glow-teal text-teal-400">Nexus</span>
               </h1>
               <p className="text-[11px] text-slate-500 font-mono mt-0.5 tracking-wider">
-                Autonomous Swarm Financial Execution Engine & Consensus Pipeline
+                Autonomous Swarm Financial Execution Engine &amp; Consensus Pipeline
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            {/* User badge */}
+            <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1.5 rounded-lg bg-violet-950/30 border border-violet-500/20 text-violet-400">
+              <User className="w-3 h-3" />
+              <span className="font-semibold">{user.username}</span>
+            </div>
+
             {/* Security badge */}
             <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1.5 rounded-lg bg-slate-900/60 border border-slate-800/60 text-slate-500">
               <Shield className="w-3 h-3" />
@@ -79,6 +116,16 @@ export default function OmniAgentNexus() {
                 {state.isConnected ? "SYSTEM LIVE" : "DISCONNECTED"}
               </span>
             </div>
+
+            {/* Logout button */}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1.5 rounded-lg bg-slate-900/60 border border-slate-800/60 text-slate-500 hover:text-rose-400 hover:border-rose-500/20 hover:bg-rose-950/20 transition-all duration-200"
+              title="Sign out"
+            >
+              <LogOut className="w-3 h-3" />
+              <span>LOGOUT</span>
+            </button>
           </div>
         </header>
 
@@ -95,7 +142,7 @@ export default function OmniAgentNexus() {
               />
             </div>
             <div className="animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-              <PortfolioLedger portfolioData={state.portfolioData} />
+              <PortfolioLedger portfolioData={state.portfolioData} token={token} />
             </div>
           </div>
 

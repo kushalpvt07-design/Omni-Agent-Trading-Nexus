@@ -21,7 +21,7 @@ from src.core.config import logger, audit_logger
 from src.core.security import sanitize_raw_input
 from src.api.middleware.auth import verify_ws_token
 from src.persistence.checkpointer import get_checkpointer
-from src.agents.risk_agent import get_ledger_data
+from src.persistence.user_portfolio import get_user_ledger
 
 router = APIRouter(tags=["Trading"])
 
@@ -41,8 +41,9 @@ async def websocket_endpoint(
     websocket: WebSocket,
     token: str | None = Query(default=None),
 ):
-    # Authenticate before accepting the connection
-    if not verify_ws_token(token):
+    # Authenticate via JWT before accepting the connection
+    user = verify_ws_token(token)
+    if not user:
         audit_logger.warning(
             "WebSocket auth failed from %s — closing",
             websocket.client.host if websocket.client else "unknown",
@@ -50,9 +51,13 @@ async def websocket_endpoint(
         await websocket.close(code=4003, reason="Authentication failed")
         return
 
+    user_id = user["user_id"]
+    username = user["username"]
+
     await websocket.accept()
     audit_logger.info(
-        "WebSocket connected from %s",
+        "WebSocket connected — user=%s (id=%d) from %s",
+        username, user_id,
         websocket.client.host if websocket.client else "unknown",
     )
 
@@ -182,7 +187,7 @@ async def websocket_endpoint(
 
                 # Push updated portfolio to frontend
                 try:
-                    ledger = get_ledger_data()
+                    ledger = get_user_ledger(user_id)
                     await websocket.send_json({
                         "type": "portfolio_update",
                         "data": ledger,
@@ -209,6 +214,8 @@ async def websocket_endpoint(
             )
 
             initial_state = {
+                "user_id": user_id,
+                "username": username,
                 "messages": [HumanMessage(content=clean_directive)],
                 "paper_trading_enabled": payload.get("paper_trading", True),
                 "quant_data": {},
@@ -408,7 +415,7 @@ async def websocket_endpoint(
 
                 # Push updated portfolio to frontend
                 try:
-                    ledger = get_ledger_data()
+                    ledger = get_user_ledger(user_id)
                     await websocket.send_json({
                         "type": "portfolio_update",
                         "data": ledger,

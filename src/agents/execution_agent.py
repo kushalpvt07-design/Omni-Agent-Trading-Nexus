@@ -7,7 +7,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from src.state import FinancialSwarmState
-from src.agents.risk_agent import get_ledger_data, save_ledger_data, LEDGER_FILE
+from src.persistence.user_portfolio import update_user_ledger
 
 logger = logging.getLogger("omni-nexus.execution")
 
@@ -23,6 +23,7 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
     action = trade.get("action", "HOLD")
     ticker = trade.get("ticker", "")
     live_price = trade.get("estimated_price", 0.0)
+    user_id = state.get("user_id")
 
     if action in ["HOLD", "REJECT"] or live_price <= 0:
         return {"messages": [AIMessage(content="Execution Engine: No action taken. Holding position.")]}
@@ -30,22 +31,18 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
     if "." in ticker:
         is_paper = state.get("paper_trading_enabled", True)
         if is_paper:
-            # Still record paper trade in ledger for Indian market tickers
+            # Record paper trade in user's database for Indian market tickers
             raw_shares = trade.get("shares")
             shares = float(raw_shares) if raw_shares is not None else 0.0
-            if shares > 0 and live_price > 0:
-                from src.agents.risk_agent import get_ledger_data, save_ledger_data
-                ledger = get_ledger_data()
-                trade_value = shares * live_price
-                if action == "BUY":
-                    ledger["cash"] -= trade_value
-                    ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) + shares
-                elif action == "SELL":
-                    ledger["cash"] += trade_value
-                    ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) - shares
-                    if round(ledger["positions"][ticker], 4) <= 0:
-                        del ledger["positions"][ticker]
-                save_ledger_data(ledger)
+            if shares > 0 and live_price > 0 and user_id is not None:
+                update_user_ledger(
+                    user_id=user_id,
+                    action=action,
+                    ticker=ticker,
+                    shares=shares,
+                    price=live_price,
+                    reasoning=trade.get("reasoning"),
+                )
             return {
                 "proposed_trade": trade,
                 "messages": [AIMessage(content=f"Paper Trade Logged: {action} {shares} shares of {ticker} @ ₹{live_price:.2f}. Note: Alpaca broker supports US markets only — this trade was recorded in the paper ledger for tracking.")]
@@ -91,24 +88,21 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
         order = await asyncio.to_thread(client.submit_order, order_data)
         mode = "PAPER" if is_paper else "LIVE"
 
-        # Update ledger with file-safe write
-        ledger = get_ledger_data()
-
-        trade_value = shares * live_price
-        if action == "BUY":
-            ledger["cash"] -= trade_value
-            ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) + shares
-        elif action == "SELL":
-            ledger["cash"] += trade_value
-            ledger["positions"][ticker] = ledger["positions"].get(ticker, 0.0) - shares
-            if round(ledger["positions"][ticker], 4) <= 0:
-                del ledger["positions"][ticker]
-
-        save_ledger_data(ledger)
+        # Update the user's ledger in SQLite
+        if user_id is not None:
+            update_user_ledger(
+                user_id=user_id,
+                action=action,
+                ticker=ticker,
+                shares=shares,
+                price=live_price,
+                reasoning=trade.get("reasoning"),
+                alpaca_order_id=str(order.id),
+            )
 
         logger.info(
-            "Order executed (%s): %s %s shares of %s — Alpaca ID: %s",
-            mode, action, shares, ticker, order.id,
+            "Order executed (%s): %s %s shares of %s — Alpaca ID: %s (user=%s)",
+            mode, action, shares, ticker, order.id, user_id,
         )
 
         return {
@@ -149,4 +143,3 @@ async def execution_agent_node(state: FinancialSwarmState) -> dict:
             "errors": [f"Alpaca API Error: {str(e)}"],
             "messages": [AIMessage(content=f"Alpaca API Error: {str(e)}")],
         }
-

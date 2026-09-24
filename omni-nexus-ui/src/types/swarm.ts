@@ -63,6 +63,27 @@ export interface PortfolioData {
   positions: PortfolioPosition[];
 }
 
+// ---- Portfolio History (for portfolio value chart) ----
+
+export interface PortfolioHistoryPoint {
+  timestamp: string;
+  total_value: number;
+  cash: number;
+}
+
+export interface PortfolioChange {
+  start_value: number;
+  current_value: number;
+  change_amount: number;
+  change_pct: number;
+}
+
+export interface PortfolioHistory {
+  timeframe: string;
+  data_points: PortfolioHistoryPoint[];
+  change: PortfolioChange | null;
+}
+
 // ---- WebSocket Log Entry ----
 
 export interface LogMessage {

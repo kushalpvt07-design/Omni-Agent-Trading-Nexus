@@ -13,6 +13,7 @@ export type { LogMessage } from "@/types/swarm";
 
 const RECONNECT_INTERVAL_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 30000;
+const PORTFOLIO_REFRESH_INTERVAL_MS = 30000; // Refresh portfolio every 30s
 
 export function useSwarmWebSocket(url: string, token?: string) {
   const [state, setState] = useState<SwarmState>({
@@ -29,6 +30,23 @@ export function useSwarmWebSocket(url: string, token?: string) {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalCloseRef = useRef(false);
+  const portfolioIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Centralized portfolio fetch — reused by initial load, WS events, and polling
+  const refreshPortfolio = useCallback(() => {
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    fetch("http://localhost:8000/api/v1/portfolio", { headers })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: PortfolioData) => {
+        setState((prev) => ({ ...prev, portfolioData: data }));
+      })
+      .catch(() => {});
+  }, [token]);
 
   const connect = useCallback(() => {
     // Prevent duplicate connections
@@ -50,12 +68,16 @@ export function useSwarmWebSocket(url: string, token?: string) {
       setState((prev) => ({ ...prev, isConnected: true }));
 
       // Fetch initial portfolio data via REST
-      fetch("http://localhost:8000/api/v1/portfolio")
-        .then((res) => res.json())
-        .then((data: PortfolioData) => {
-          setState((prev) => ({ ...prev, portfolioData: data }));
-        })
-        .catch(() => {});
+      refreshPortfolio();
+
+      // Start periodic portfolio refresh to keep live prices current
+      if (portfolioIntervalRef.current) {
+        clearInterval(portfolioIntervalRef.current);
+      }
+      portfolioIntervalRef.current = setInterval(
+        refreshPortfolio,
+        PORTFOLIO_REFRESH_INTERVAL_MS
+      );
     };
 
     ws.onclose = () => {
@@ -64,6 +86,12 @@ export function useSwarmWebSocket(url: string, token?: string) {
         isConnected: false,
         isDeploying: false,
       }));
+
+      // Stop portfolio polling when disconnected
+      if (portfolioIntervalRef.current) {
+        clearInterval(portfolioIntervalRef.current);
+        portfolioIntervalRef.current = null;
+      }
 
       // Auto-reconnect with exponential backoff (unless intentionally closed)
       if (!intentionalCloseRef.current) {
@@ -124,6 +152,8 @@ export function useSwarmWebSocket(url: string, token?: string) {
             isDeploying: false,
             directiveLogs: [...prev.directiveLogs, payload as LogMessage],
           }));
+          // Immediately refresh portfolio after pipeline completes
+          refreshPortfolio();
         }
 
         if (payload.type === "checkpoint") {
@@ -136,18 +166,13 @@ export function useSwarmWebSocket(url: string, token?: string) {
         // Portfolio update after trade execution
         if (payload.type === "portfolio_update") {
           // Fetch full portfolio with live prices from REST
-          fetch("http://localhost:8000/api/v1/portfolio")
-            .then((res) => res.json())
-            .then((data: PortfolioData) => {
-              setState((prev) => ({ ...prev, portfolioData: data }));
-            })
-            .catch(() => {});
+          refreshPortfolio();
         }
       } catch (err) {
         console.error("Failed to parse WebSocket message:", err);
       }
     };
-  }, [url, token]);
+  }, [url, token, refreshPortfolio]);
 
   useEffect(() => {
     intentionalCloseRef.current = false;
@@ -157,6 +182,10 @@ export function useSwarmWebSocket(url: string, token?: string) {
       intentionalCloseRef.current = true;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
+      }
+      if (portfolioIntervalRef.current) {
+        clearInterval(portfolioIntervalRef.current);
+        portfolioIntervalRef.current = null;
       }
       wsRef.current?.close();
     };
@@ -197,3 +226,4 @@ export function useSwarmWebSocket(url: string, token?: string) {
 
   return { state, deployDirective, resolveCheckpoint };
 }
+

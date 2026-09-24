@@ -10,8 +10,17 @@ logger = logging.getLogger("omni-nexus.risk")
 LEDGER_FILE = "portfolio_ledger.json"
 
 
-def get_ledger_data() -> dict:
-    """Reads the portfolio ledger. Returns safe defaults if the file is missing or corrupt."""
+def get_ledger_data(user_id: int | None = None) -> dict:
+    """Reads the portfolio ledger.
+
+    If user_id is provided, reads from the per-user SQLite database.
+    Otherwise, falls back to the JSON file for backward compatibility.
+    Returns safe defaults if the data is missing or corrupt.
+    """
+    if user_id is not None:
+        from src.persistence.user_portfolio import get_user_ledger
+        return get_user_ledger(user_id)
+
     if not os.path.exists(LEDGER_FILE):
         return {"cash": 100000.0, "positions": {}}
     try:
@@ -88,7 +97,7 @@ async def risk_agent_node(state: FinancialSwarmState) -> dict:
             "errors": [f"FATAL: Risk Desk could not resolve live price for {ticker}. Aborting."],
         }
 
-    ledger = get_ledger_data()
+    ledger = get_ledger_data(user_id=state.get("user_id"))
     cash_available = ledger["cash"]
     positions = ledger["positions"]
 

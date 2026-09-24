@@ -21,6 +21,10 @@ class TradeProposal(TypedDict, total=False):
 class FinancialSwarmState(TypedDict):
     """Central state schema for the LangGraph trading swarm."""
 
+    # User Identity (set by WebSocket handler from JWT)
+    user_id: Optional[int]
+    username: Optional[str]
+
     # Core Communication
     messages: Annotated[List[BaseMessage], operator.add]
     errors: Annotated[List[str], operator.add]
