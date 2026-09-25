@@ -1,294 +1,46 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
-import { CandlestickChart, AlertCircle, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
+import React, { useState } from "react";
+import { TrendingUp, TrendingDown, BarChart3, Activity } from "lucide-react";
 import {
-  ComposedChart,
-  Bar,
+  AreaChart,
+  Area,
   ResponsiveContainer,
   YAxis,
   XAxis,
-  CartesianGrid,
   Tooltip,
-  Cell,
 } from "recharts";
 
 /* ── colour palette ───────────────────────────────────────────────── */
 
 const BULL_COLOR = "#2dd4bf"; // teal – bullish
-const BULL_COLOR_DIM = "rgba(45, 212, 191, 0.35)";
 const BEAR_COLOR = "#f43f5e"; // rose – bearish
-const BEAR_COLOR_DIM = "rgba(244, 63, 94, 0.35)";
-const DOJI_COLOR = "#64748b"; // slate – flat candle
 
-const TIMEFRAME_COLORS: Record<string, { bull: string; bear: string; label: string }> = {
-  "1D": { bull: "#a78bfa", bear: "#c084fc", label: "1 Day" },
-  "5D": { bull: "#38bdf8", bear: "#7dd3fc", label: "5 Days" },
-  "15D": { bull: "#fb923c", bear: "#fdba74", label: "15 Days" },
-  "1M": { bull: "#2dd4bf", bear: "#5eead4", label: "1 Month" },
-};
+/* ── simple line tooltip ─────────────────────────────────────────── */
 
-/* ── helpers ──────────────────────────────────────────────────────── */
+function LineTooltip({ active, payload, currencySymbol }: any) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0]?.payload;
+  if (!d) return null;
 
-/**
- * Enrich data points with candlestick fields.
- *
- * Each point gets `_domainMin` embedded — the Y-axis domain minimum.
- * The custom bar shape uses this plus the bar's rendered y/height
- * (which maps to `high` → `_domainMin`) to derive pixelsPerUnit
- * and position open/close/low correctly.
- */
-function enrichCandleData(data: any[], domainMin: number) {
-  return data.map((d) => {
-    const open = d.open ?? d.price;
-    const close = d.close ?? d.price;
-    const high = d.high ?? Math.max(open, close);
-    const low = d.low ?? Math.min(open, close);
-    const isBull = close >= open;
-
-    return {
-      ...d,
-      open,
-      close,
-      high,
-      low,
-      isBull,
-      _domainMin: domainMin,
-    };
-  });
-}
-
-/** Compute Y-axis domain with padding from raw OHLC data */
-function computeDomain(data: any[]) {
-  if (!data || data.length === 0) return { minY: 0, maxY: 0, yPad: 1, domainMin: 0 };
-  const lows = data.map((d) => d.low ?? d.close ?? d.price ?? 0);
-  const highs = data.map((d) => d.high ?? d.open ?? d.price ?? 0);
-  const minY = Math.min(...lows);
-  const maxY = Math.max(...highs);
-  const yPad = (maxY - minY) * 0.08 || 1;
-  return { minY, maxY, yPad, domainMin: minY - yPad };
-}
-
-/* ── custom candlestick bar shape ─────────────────────────────────── */
-
-/**
- * Recharts renders a single Bar from the Y-axis domain minimum up to `high`.
- * Props received: x, y (pixel top = high), width, height (pixels from high to domainMin).
- *
- * We derive: pixelsPerUnit = height / (high - domainMin)
- * Then for any OHLC value V: pixelY = y + (high - V) * pixelsPerUnit
- */
-function CandleShape(props: any) {
-  const { x = 0, y: barY = 0, width = 0, height: barH = 0, payload } = props;
-  if (!payload) return null;
-
-  const { open, close, high, low, isBull, _domainMin } = payload;
-
-  // Derive the pixel scale from what Recharts gave us
-  const dataRange = high - _domainMin;
-  if (dataRange <= 0 || barH <= 0) return null;
-  const ppu = barH / dataRange; // pixels per unit of price
-
-  // Convert data values to pixel Y
-  const toY = (val: number) => barY + (high - val) * ppu;
-
-  const bodyTopVal = Math.max(open, close);
-  const bodyBotVal = Math.min(open, close);
-
-  const wickTopY = toY(high);
-  const wickBotY = toY(low);
-  const bodyTopY = toY(bodyTopVal);
-  const bodyBotY = toY(bodyBotVal);
-
-  const bodyH = Math.max(bodyBotY - bodyTopY, 1);
-  const wickH = Math.max(wickBotY - wickTopY, 0.5);
-
-  const centerX = x + width / 2;
-  const wickW = Math.max(1, width * 0.12);
-  const bodyW = Math.max(2, width * 0.6);
-
-  const fillColor = isBull ? BULL_COLOR : BEAR_COLOR;
-  const fillColorDim = isBull ? BULL_COLOR_DIM : BEAR_COLOR_DIM;
-  const isDoji = Math.abs(open - close) < 0.01;
+  const price = d.close ?? d.price ?? 0;
+  const borderColor = "rgba(45, 212, 191, 0.25)";
 
   return (
-    <g>
-      {/* Wick (high→low shadow line) */}
-      <rect
-        x={centerX - wickW / 2}
-        y={wickTopY}
-        width={wickW}
-        height={wickH}
-        fill={isDoji ? DOJI_COLOR : fillColor}
-        rx={0.5}
-        opacity={0.7}
-      />
-      {/* Body (open→close) */}
-      <rect
-        x={centerX - bodyW / 2}
-        y={bodyTopY}
-        width={bodyW}
-        height={bodyH}
-        fill={isDoji ? DOJI_COLOR : isBull ? fillColorDim : fillColor}
-        stroke={isDoji ? DOJI_COLOR : fillColor}
-        strokeWidth={1}
-        rx={1}
-      />
-    </g>
-  );
-}
-
-/* ── custom OHLC tooltip ─────────────────────────────────────────── */
-
-function CandleTooltip({ active, payload, label, currencySymbol }: any) {
-  if (active && payload && payload.length) {
-    const d = payload[0]?.payload;
-    if (!d) return null;
-    const isBull = (d.close ?? d.price) >= (d.open ?? d.price);
-    const borderColor = isBull ? "rgba(45, 212, 191, 0.3)" : "rgba(244, 63, 94, 0.3)";
-    const accentColor = isBull ? BULL_COLOR : BEAR_COLOR;
-
-    return (
-      <div
-        className="rounded-xl border bg-[#0a0e17]/95 px-3.5 py-3 backdrop-blur-xl shadow-2xl"
-        style={{ borderColor }}
-      >
-        <p className="text-[10px] text-slate-400 font-mono mb-2 tracking-wider uppercase">
-          {label || d.time || "—"}
-        </p>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-          {[
-            { label: "Open", val: d.open },
-            { label: "High", val: d.high },
-            { label: "Low", val: d.low },
-            { label: "Close", val: d.close ?? d.price },
-          ].map((item) => (
-            <div key={item.label} className="flex items-center justify-between gap-2">
-              <span className="text-[9px] text-slate-500 font-mono">{item.label}</span>
-              <span className="text-[11px] font-bold font-mono" style={{ color: accentColor }}>
-                {currencySymbol}
-                {Number(item.val).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  return null;
-}
-
-/* ── Reusable candlestick chart ──────────────────────────────────── */
-
-function CandlestickChartInner({
-  data,
-  domainMin,
-  domainMax,
-  currencySymbol,
-  showXAxis = true,
-}: {
-  data: any[];
-  domainMin: number;
-  domainMax: number;
-  currencySymbol: string;
-  showXAxis?: boolean;
-}) {
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: showXAxis ? 4 : 0 }}>
-        <CartesianGrid
-          strokeDasharray="3 3"
-          stroke="rgba(51, 65, 85, 0.12)"
-          vertical={false}
-        />
-        {showXAxis && (
-          <XAxis
-            dataKey="time"
-            tick={{ fill: "#475569", fontSize: 9, fontFamily: "var(--font-mono)" }}
-            axisLine={false}
-            tickLine={false}
-            interval="preserveStartEnd"
-          />
-        )}
-        <YAxis
-          domain={[domainMin, domainMax]}
-          hide
-        />
-        <Tooltip
-          content={<CandleTooltip currencySymbol={currencySymbol} />}
-          cursor={{
-            stroke: "rgba(45, 212, 191, 0.12)",
-            strokeWidth: 1,
-            strokeDasharray: "4 4",
-          }}
-        />
-        {/* Single bar from domainMin to high — CandleShape draws
-            the actual wick + body using the pixel scale it derives */}
-        <Bar
-          dataKey="high"
-          isAnimationActive={false}
-          shape={(props: any) => <CandleShape {...props} />}
-        >
-          {data.map((entry: any, idx: number) => (
-            <Cell
-              key={idx}
-              fill={entry.isBull ? BULL_COLOR : BEAR_COLOR}
-            />
-          ))}
-        </Bar>
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-}
-
-/* ── mini candlestick chart for ALL view ──────────────────────────── */
-
-function MiniCandleChart({
-  data,
-  colors,
-  title,
-  currencySymbol,
-}: {
-  data: any[];
-  colors: typeof TIMEFRAME_COLORS["1D"];
-  title: string;
-  currencySymbol: string;
-}) {
-  const { enriched, domainMin, domainMax } = useMemo(() => {
-    const dom = computeDomain(data);
-    return {
-      enriched: enrichCandleData(data, dom.domainMin),
-      domainMin: dom.domainMin,
-      domainMax: dom.maxY + dom.yPad,
-    };
-  }, [data]);
-
-  return (
-    <div className="flex flex-col rounded-lg bg-[#030508]/80 border border-slate-800/30 p-2 h-full">
-      <span
-        className="text-[9px] font-mono tracking-wider uppercase mb-1"
-        style={{ color: colors.bull }}
-      >
-        {title}
-      </span>
-      <div className="flex-1 min-h-0">
-        {enriched.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <span className="text-[8px] font-mono text-slate-600">No data</span>
-          </div>
-        ) : (
-          <CandlestickChartInner
-            data={enriched}
-            domainMin={domainMin}
-            domainMax={domainMax}
-            currencySymbol={currencySymbol}
-            showXAxis={false}
-          />
-        )}
-      </div>
+    <div
+      className="rounded-xl border bg-[#0a0e17]/95 px-3.5 py-2.5 backdrop-blur-xl shadow-2xl"
+      style={{ borderColor }}
+    >
+      <p className="text-[10px] text-slate-400 font-mono mb-1 tracking-wider uppercase">
+        {d.time || "—"}
+      </p>
+      <p className="text-sm font-bold font-mono text-slate-100">
+        {currencySymbol}
+        {Number(price).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}
+      </p>
     </div>
   );
 }
@@ -297,7 +49,7 @@ function MiniCandleChart({
 
 export default function AssetIntelligence({ assetData }: { assetData: any }) {
   const [timeframe, setTimeframe] = useState("1M");
-  const timeframes = ["1D", "5D", "15D", "1M", "ALL"];
+  const timeframes = ["1D", "5D", "15D", "1M"];
 
   /* ---------- awaiting state ---------- */
   if (!assetData) {
@@ -306,7 +58,7 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
         <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-3">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center">
-              <CandlestickChart className="w-3.5 h-3.5 text-teal-400" />
+              <Activity className="w-3.5 h-3.5 text-teal-400" />
             </div>
             <h2 className="text-xs tracking-wider font-mono font-semibold text-slate-300 uppercase">
               Asset Intelligence
@@ -330,12 +82,13 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
   /* ---------- data extraction ---------- */
   const timeframeData = assetData.timeframe_data || {};
   const allChartData = assetData.chart_data || assetData.chart || assetData.historical_data || [];
-  const rawData = timeframeData[timeframe] || allChartData;
+  const rawData: any[] = timeframeData[timeframe] || allChartData;
 
-  /* ---------- Y-axis domain (padded) ---------- */
-  const { minY, maxY, yPad, domainMin } = computeDomain(rawData);
-  const domainMax = maxY + yPad;
-  const data = enrichCandleData(rawData, domainMin);
+  // Use close/price for the line chart
+  const chartData = rawData.map((d: any) => ({
+    ...d,
+    value: d.close ?? d.price ?? 0,
+  }));
 
   const price = assetData.current_price || assetData.price || "0.00";
   const volatility = assetData.volatility || "0.00";
@@ -354,7 +107,8 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
       ? Number(price).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const isAllView = timeframe === "ALL";
+  const lineColor = isPositive ? BULL_COLOR : BEAR_COLOR;
+  const gradientId = "assetLineGradient";
 
   return (
     <div className="w-full h-full rounded-2xl glass-card gradient-border p-5 flex flex-col group">
@@ -362,7 +116,7 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
       <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-3">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center transition-all duration-300 group-hover:bg-teal-500/15 group-hover:border-teal-500/30">
-            <CandlestickChart className="w-3.5 h-3.5 text-teal-400" />
+            <Activity className="w-3.5 h-3.5 text-teal-400" />
           </div>
           <div>
             <h2 className="text-xs tracking-wider font-mono font-semibold text-slate-200 uppercase">
@@ -388,34 +142,60 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
         </div>
       </div>
 
-      {/* Chart Area */}
+      {/* Chart Area — Simple Line Chart */}
       <div className="relative flex-1 w-full min-h-[120px] mt-1 rounded-xl bg-[#030508]/80 overflow-hidden border border-slate-800/30">
-        {isAllView ? (
-          /* ALL view: 2×2 grid of mini candlestick charts */
-          <div className="grid grid-cols-2 grid-rows-2 gap-2 p-2 h-full">
-            {(["1D", "5D", "15D", "1M"] as const).map((tf) => (
-              <MiniCandleChart
-                key={tf}
-                data={timeframeData[tf] || allChartData}
-                colors={TIMEFRAME_COLORS[tf]}
-                title={TIMEFRAME_COLORS[tf].label}
-                currencySymbol={currencySymbol}
-              />
-            ))}
-          </div>
-        ) : data.length === 0 ? (
+        {chartData.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
-            <AlertCircle className="w-5 h-5 text-rose-900/70" />
-            <span className="text-[10px] font-mono uppercase tracking-widest text-slate-600">No Chart Data In Payload</span>
+            <BarChart3 className="w-5 h-5 text-slate-700" />
+            <span className="text-[10px] font-mono uppercase tracking-widest text-slate-600">No Chart Data</span>
           </div>
         ) : (
-          <CandlestickChartInner
-            data={data}
-            domainMin={domainMin}
-            domainMax={domainMax}
-            currencySymbol={currencySymbol}
-            showXAxis={true}
-          />
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 4 }}>
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={lineColor} stopOpacity={0.25} />
+                  <stop offset="50%" stopColor={lineColor} stopOpacity={0.08} />
+                  <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis
+                dataKey="time"
+                tick={{ fill: "#475569", fontSize: 9, fontFamily: "var(--font-mono)" }}
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                domain={["dataMin - 1", "dataMax + 1"]}
+                hide
+              />
+              <Tooltip
+                content={<LineTooltip currencySymbol={currencySymbol} />}
+                cursor={{
+                  stroke: "rgba(45, 212, 191, 0.12)",
+                  strokeWidth: 1,
+                  strokeDasharray: "4 4",
+                }}
+              />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke={lineColor}
+                strokeWidth={2}
+                fill={`url(#${gradientId})`}
+                animationDuration={800}
+                animationEasing="ease-out"
+                dot={false}
+                activeDot={{
+                  r: 4,
+                  stroke: lineColor,
+                  strokeWidth: 2,
+                  fill: "#0a0e17",
+                }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
         )}
       </div>
 

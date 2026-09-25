@@ -32,7 +32,7 @@ def _get_jwt_secret() -> str:
 def _create_token(user_id: int, username: str) -> str:
     """Create a signed JWT token for the given user."""
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "username": username,
         "exp": datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRY_DAYS),
         "iat": datetime.now(timezone.utc),

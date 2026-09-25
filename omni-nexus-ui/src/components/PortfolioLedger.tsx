@@ -311,10 +311,10 @@ export default function PortfolioLedger({
         {/* Gradient left accent line */}
         <div className="absolute left-0 top-0 bottom-0 w-[2px] rounded-full bg-gradient-to-b from-violet-500/40 via-teal-500/20 to-transparent" />
 
-        {chartData.length >= 2 ? (
+        {chartData.length >= 1 ? (
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart
-              data={chartData}
+              data={chartData.length === 1 ? [chartData[0], { ...chartData[0], label: "" }] : chartData}
               margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
             >
               <defs>

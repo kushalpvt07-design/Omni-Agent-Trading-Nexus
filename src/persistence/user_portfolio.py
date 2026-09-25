@@ -166,11 +166,9 @@ def record_portfolio_snapshot(user_id: int, total_value: float, cash: float) -> 
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=timezone.utc)
                 elapsed = (datetime.now(timezone.utc) - last_ts).total_seconds()
-                last_value = last["total_value"]
 
                 if elapsed < MIN_SNAPSHOT_INTERVAL_SECONDS:
-                    if last_value > 0 and abs(total_value - last_value) / last_value < 0.0001:
-                        return
+                    return  # Too soon — skip
             except Exception:
                 pass
 

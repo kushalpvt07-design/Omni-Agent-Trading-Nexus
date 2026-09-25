@@ -13,6 +13,8 @@ from fastapi import APIRouter, Query, Depends
 
 from src.api.middleware.auth import get_current_user
 from src.core.config import logger
+from src.core.market_data import get_latest_prices
+from src.persistence.database import get_db
 from src.persistence.user_portfolio import (
     get_user_ledger,
     record_portfolio_snapshot,
@@ -20,18 +22,25 @@ from src.persistence.user_portfolio import (
     get_portfolio_change,
     get_user_trades,
 )
-from utils import get_live_asset_data
 
 router = APIRouter(tags=["Portfolio"])
 
 
 @router.get("/api/v1/portfolio")
 async def get_portfolio(user=Depends(get_current_user)):
-    """Return current portfolio holdings with live market data for the authenticated user."""
+    """Return current portfolio holdings with live Alpaca market data for the authenticated user."""
     user_id = user["user_id"]
     ledger = get_user_ledger(user_id)
     cash = ledger.get("cash", 0.0)
     raw_positions = ledger.get("positions", {})
+
+    # Collect all tickers that need pricing
+    tickers_to_price = [t for t, s in raw_positions.items() if s > 0]
+
+    # Fetch all live prices in a single Alpaca API call
+    live_prices = {}
+    if tickers_to_price:
+        live_prices = await asyncio.to_thread(get_latest_prices, tickers_to_price)
 
     positions = []
     total_market_value = 0.0
@@ -40,13 +49,17 @@ async def get_portfolio(user=Depends(get_current_user)):
         if shares <= 0:
             continue
 
-        current_price = 0.0
-        try:
-            live_data = await asyncio.to_thread(get_live_asset_data, ticker)
-            if live_data and live_data.get("current_price"):
-                current_price = live_data["current_price"]
-        except Exception as e:
-            logger.warning("Failed to fetch live price for %s: %s", ticker, e)
+        current_price = live_prices.get(ticker, 0.0)
+
+        # Fallback: use avg_cost when Alpaca price is unavailable
+        if current_price == 0.0:
+            with get_db() as conn:
+                pos_row = conn.execute(
+                    "SELECT avg_cost FROM user_positions WHERE user_id = ? AND ticker = ?",
+                    (user_id, ticker),
+                ).fetchone()
+                if pos_row and pos_row["avg_cost"]:
+                    current_price = pos_row["avg_cost"]
 
         market_value = round(shares * current_price, 2)
         total_market_value += market_value
@@ -54,7 +67,7 @@ async def get_portfolio(user=Depends(get_current_user)):
         positions.append({
             "ticker": ticker,
             "shares": round(shares, 4),
-            "current_price": current_price,
+            "current_price": round(current_price, 2),
             "market_value": market_value,
         })
 

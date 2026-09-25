@@ -52,7 +52,7 @@ async def get_current_user(request: Request) -> dict:
                 status_code=HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload.",
             )
-        return {"user_id": user_id, "username": username}
+        return {"user_id": int(user_id), "username": username}
     except JWTError:
         raise HTTPException(
             status_code=HTTP_401_UNAUTHORIZED,
@@ -66,23 +66,15 @@ def verify_ws_token(token: str | None) -> dict | None:
     Returns: {"user_id": int, "username": str} on success, None on failure.
     """
     if not token:
-        audit_logger.warning("WS token verification failed: no token provided")
         return None
     try:
-        secret = _get_jwt_secret()
-        audit_logger.info("WS token verification: secret=%s..., token=%s...", secret[:8], token[:20])
-        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, _get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         user_id = payload.get("sub")
         username = payload.get("username")
         if user_id is None or username is None:
-            audit_logger.warning("WS token verification failed: missing sub or username in payload: %s", payload)
             return None
-        return {"user_id": user_id, "username": username}
-    except JWTError as e:
-        audit_logger.warning("WS token verification failed: JWTError: %s", e)
-        return None
-    except Exception as e:
-        audit_logger.warning("WS token verification failed: unexpected error: %s", e)
+        return {"user_id": int(user_id), "username": username}
+    except JWTError:
         return None
 
 
