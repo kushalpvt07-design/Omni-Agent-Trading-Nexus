@@ -8,14 +8,15 @@ __pycache__/
 # ============================================================
 # Runtime State & Databases
 # ============================================================
-checkpoints.sqlite
-checkpoints.sqlite-shm
-checkpoints.sqlite-wal
-checkpoints.sqlite-journal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
 portfolio_ledger.json
-ledger.sqlite
-ledger.sqlite-shm
-ledger.sqlite-wal
 
 # ============================================================
 # Environments & Secrets
