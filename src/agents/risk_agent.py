@@ -1,57 +1,19 @@
-import os
-import json
 import logging
-import tempfile
 from langchain_core.messages import AIMessage
 from src.state import FinancialSwarmState
 
 logger = logging.getLogger("omni-nexus.risk")
 
-LEDGER_FILE = "portfolio_ledger.json"
-
 
 def get_ledger_data(user_id: int | None = None) -> dict:
-    """Reads the portfolio ledger.
+    """Read the portfolio ledger for the given user from SQLite.
 
-    If user_id is provided, reads from the per-user SQLite database.
-    Otherwise, falls back to the JSON file for backward compatibility.
-    Returns safe defaults if the data is missing or corrupt.
+    Returns safe defaults if user_id is not provided or data is unavailable.
     """
     if user_id is not None:
         from src.persistence.user_portfolio import get_user_ledger
         return get_user_ledger(user_id)
-
-    if not os.path.exists(LEDGER_FILE):
-        return {"cash": 100000.0, "positions": {}}
-    try:
-        with open(LEDGER_FILE, "r") as f:
-            data = json.load(f)
-            return {
-                "cash": data.get("cash", 100000.0),
-                "positions": data.get("positions", {}),
-            }
-    except Exception:
-        logger.warning("Ledger file is corrupt or unreadable — returning empty ledger")
-        return {"cash": 0.0, "positions": {}}
-
-
-def save_ledger_data(ledger: dict) -> None:
-    """Atomically writes the ledger via temp-file + rename to prevent corruption."""
-    dir_name = os.path.dirname(os.path.abspath(LEDGER_FILE))
-    fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=dir_name)
-    try:
-        with os.fdopen(fd, "w") as tmp_f:
-            json.dump(ledger, tmp_f, indent=4)
-        os.replace(tmp_path, LEDGER_FILE)
-    except Exception:
-        # Clean up temp file on failure
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
-
-
-def get_available_cash() -> float:
-    return get_ledger_data()["cash"]
+    return {"cash": 100000.0, "positions": {}}
 
 
 async def risk_agent_node(state: FinancialSwarmState) -> dict:

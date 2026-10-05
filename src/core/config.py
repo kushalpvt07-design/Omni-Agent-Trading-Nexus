@@ -51,7 +51,6 @@ class Settings:
 
     # Persistence
     CHECKPOINT_DB: str = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
-    LEDGER_FILE: str = os.getenv("LEDGER_FILE", "portfolio_ledger.json")
 
     # Trading
     ALPACA_API_KEY: str | None = os.getenv("ALPACA_API_KEY")
