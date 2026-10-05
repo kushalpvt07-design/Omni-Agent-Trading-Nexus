@@ -180,11 +180,8 @@ def record_portfolio_snapshot(user_id: int, total_value: float, cash: float) -> 
         )
 
 
-def get_portfolio_history(user_id: int, timeframe: str = "ALL") -> List[Dict[str, Any]]:
-    """Return portfolio history filtered by timeframe.
-
-    Supported timeframes: 1D, 1M, 1Y, ALL.
-    """
+def _get_raw_snapshots(user_id: int, timeframe: str) -> List[Dict[str, Any]]:
+    """Fetch raw portfolio snapshots from the database for a given timeframe."""
     cutoff_map = {
         "1D": timedelta(days=1),
         "1M": timedelta(days=30),
@@ -215,6 +212,181 @@ def get_portfolio_history(user_id: int, timeframe: str = "ALL") -> List[Dict[str
         }
         for r in rows
     ]
+
+
+def _get_account_created_at(user_id: int) -> Optional[datetime]:
+    """Get the datetime the user account was created."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT created_at FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row and row["created_at"]:
+            dt = datetime.fromisoformat(row["created_at"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+    return None
+
+
+def _get_first_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
+    """Get the user's very first portfolio snapshot ever (used as baseline)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT total_value, cash, recorded_at as timestamp "
+            "FROM portfolio_snapshots WHERE user_id = ? ORDER BY recorded_at LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if row:
+            return {
+                "timestamp": row["timestamp"],
+                "total_value": row["total_value"],
+                "cash": row["cash"],
+            }
+    return None
+
+
+def _lerp(v0: float, v1: float, t: float) -> float:
+    """Linear interpolation between v0 and v1 at fraction t."""
+    return v0 + (v1 - v0) * t
+
+
+def get_portfolio_history(user_id: int, timeframe: str = "ALL") -> List[Dict[str, Any]]:
+    """Return portfolio history with synthetic data points spanning the full timeframe.
+
+    Generates evenly-spaced data points so the chart always covers the full
+    requested time window instead of only showing data recorded since login.
+
+    Supported timeframes: 1D, 1M, 1Y, ALL.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Determine chart parameters per timeframe
+    timeframe_config = {
+        "1D":  {"delta": timedelta(days=1),   "points": 48},   # ~30 min intervals
+        "1M":  {"delta": timedelta(days=30),  "points": 60},   # ~12 hour intervals
+        "1Y":  {"delta": timedelta(days=365), "points": 52},   # ~weekly intervals
+        "ALL": {"delta": None,                "points": 60},
+    }
+
+    config = timeframe_config.get(timeframe, timeframe_config["1D"])
+    num_points = config["points"]
+
+    # Get actual snapshots for the timeframe
+    raw = _get_raw_snapshots(user_id, timeframe)
+
+    # Parse timestamps on raw snapshots
+    snapshots = []
+    for r in raw:
+        try:
+            dt = datetime.fromisoformat(r["timestamp"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            snapshots.append({
+                "dt": dt,
+                "total_value": r["total_value"],
+                "cash": r["cash"],
+            })
+        except (ValueError, TypeError):
+            continue
+
+    # Determine the start of the time window
+    if config["delta"] is not None:
+        window_start = now - config["delta"]
+    else:
+        # For "ALL": go back to account creation or first snapshot
+        account_created = _get_account_created_at(user_id)
+        first_snap = _get_first_snapshot(user_id)
+        first_snap_dt = None
+        if first_snap:
+            try:
+                first_snap_dt = datetime.fromisoformat(first_snap["timestamp"])
+                if first_snap_dt.tzinfo is None:
+                    first_snap_dt = first_snap_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                pass
+
+        candidates = [dt for dt in [account_created, first_snap_dt] if dt is not None]
+        if candidates:
+            window_start = min(candidates)
+            # Ensure at least a 1-day window
+            if (now - window_start).total_seconds() < 86400:
+                window_start = now - timedelta(days=1)
+        else:
+            window_start = now - timedelta(days=1)
+
+    # Determine the baseline value (before any snapshots in the window)
+    baseline_value = DEFAULT_STARTING_CASH
+    baseline_cash = DEFAULT_STARTING_CASH
+
+    # Check if there's a snapshot just before the window starts
+    with get_db() as conn:
+        prior = conn.execute(
+            "SELECT total_value, cash FROM portfolio_snapshots "
+            "WHERE user_id = ? AND recorded_at < ? ORDER BY recorded_at DESC LIMIT 1",
+            (user_id, window_start.isoformat()),
+        ).fetchone()
+        if prior:
+            baseline_value = prior["total_value"]
+            baseline_cash = prior["cash"]
+
+    # Build timeline: evenly spaced points from window_start to now
+    total_seconds = max((now - window_start).total_seconds(), 1.0)
+    interval_seconds = total_seconds / max(num_points - 1, 1)
+
+    timeline: List[datetime] = []
+    for i in range(num_points):
+        t = window_start + timedelta(seconds=interval_seconds * i)
+        timeline.append(t)
+
+    # Build output by interpolating between real snapshots
+    result: List[Dict[str, Any]] = []
+
+    # Create a sorted list of all "anchor" points: baseline + real snapshots + now
+    anchors = [{"dt": window_start, "total_value": baseline_value, "cash": baseline_cash}]
+    anchors.extend(snapshots)
+    # Extend last known value to now
+    if snapshots:
+        anchors.append({"dt": now, "total_value": snapshots[-1]["total_value"], "cash": snapshots[-1]["cash"]})
+    else:
+        anchors.append({"dt": now, "total_value": baseline_value, "cash": baseline_cash})
+
+    # Sort anchors by time
+    anchors.sort(key=lambda a: a["dt"])
+
+    # For each timeline point, find the two surrounding anchors and interpolate
+    for t in timeline:
+        # Find the right anchor index (first anchor at or after t)
+        right_idx = 0
+        for idx, a in enumerate(anchors):
+            if a["dt"] >= t:
+                right_idx = idx
+                break
+        else:
+            right_idx = len(anchors) - 1
+
+        left_idx = max(right_idx - 1, 0)
+
+        left = anchors[left_idx]
+        right = anchors[right_idx]
+
+        # Interpolation factor
+        seg_duration = (right["dt"] - left["dt"]).total_seconds()
+        if seg_duration > 0:
+            frac = (t - left["dt"]).total_seconds() / seg_duration
+            frac = max(0.0, min(1.0, frac))
+        else:
+            frac = 0.0
+
+        interp_value = round(_lerp(left["total_value"], right["total_value"], frac), 2)
+        interp_cash = round(_lerp(left["cash"], right["cash"], frac), 2)
+
+        result.append({
+            "timestamp": t.isoformat(),
+            "total_value": interp_value,
+            "cash": interp_cash,
+        })
+
+    return result
 
 
 def get_portfolio_change(user_id: int, timeframe: str = "1D") -> Optional[Dict[str, Any]]:

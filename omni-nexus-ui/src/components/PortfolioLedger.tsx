@@ -117,8 +117,13 @@ export default function PortfolioLedger({
   // Fetch portfolio history for the selected timeframe
   const fetchHistory = useCallback(
     (timeframe: Timeframe) => {
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
+      // Wait until we have a valid token — avoids a 401 burst on initial render
+      // before the parent page's useEffect propagates the token from localStorage.
+      if (!token) return;
+
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+      };
 
       fetch(
         `http://localhost:8000/api/v1/portfolio/history?timeframe=${timeframe}`,

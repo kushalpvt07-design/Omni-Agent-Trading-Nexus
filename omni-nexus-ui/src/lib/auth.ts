@@ -58,11 +58,49 @@ export function clearAuth(): void {
 }
 
 /**
- * Check if the user is currently authenticated.
- * Does not validate token expiry — the backend will reject expired tokens.
+ * Decode the JWT payload without verifying the signature.
+ * Used solely to read the `exp` claim client-side.
+ * Signature verification is always done server-side.
+ */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    // JWT base64url → standard base64
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = atob(base64);
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns true if the stored JWT token is expired or unreadable.
+ * A 30-second buffer is applied so tokens near expiry are treated as expired.
+ */
+export function isTokenExpired(): boolean {
+  const token = getToken();
+  if (!token) return true;
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== "number") return true;
+  // exp is in seconds; Date.now() is in ms. Add a 30s safety buffer.
+  return payload.exp * 1000 < Date.now() + 30_000;
+}
+
+/**
+ * Check if the user is currently authenticated with a non-expired token.
+ * Clears stale localStorage data when the token has expired so the user
+ * is redirected to login rather than hitting a wall of 401/403 errors.
  */
 export function isAuthenticated(): boolean {
-  return !!getToken() && !!getUser();
+  if (!getToken() || !getUser()) return false;
+  if (isTokenExpired()) {
+    // Purge expired session so page.tsx redirects to /login immediately.
+    clearAuth();
+    return false;
+  }
+  return true;
 }
 
 /**

@@ -48,6 +48,11 @@ async def websocket_endpoint(
             "WebSocket auth failed from %s — closing",
             websocket.client.host if websocket.client else "unknown",
         )
+        # Must accept() before close() so Starlette sends a proper WS close
+        # frame (4003) rather than rejecting the HTTP upgrade with a 403.
+        # A 403 looks like a network error to the client and triggers the
+        # reconnect loop; a 4003 WS close is a clean, intentional rejection.
+        await websocket.accept()
         await websocket.close(code=4003, reason="Authentication failed")
         return
 

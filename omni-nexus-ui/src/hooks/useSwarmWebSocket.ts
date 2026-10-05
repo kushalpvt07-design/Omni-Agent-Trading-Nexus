@@ -34,10 +34,12 @@ export function useSwarmWebSocket(url: string, token?: string) {
 
   // Centralized portfolio fetch — reused by initial load, WS events, and polling
   const refreshPortfolio = useCallback(() => {
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    // Don't fetch if we don't have a token yet
+    if (!token) return;
 
-    fetch("http://localhost:8000/api/v1/portfolio", { headers })
+    fetch("http://localhost:8000/api/v1/portfolio", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -49,6 +51,13 @@ export function useSwarmWebSocket(url: string, token?: string) {
   }, [token]);
 
   const connect = useCallback(() => {
+    // Do not attempt to connect until we have a valid auth token.
+    // The parent page sets the token asynchronously from localStorage;
+    // this guard prevents a 403-storm while the token is still null.
+    if (!token) {
+      return;
+    }
+
     // Prevent duplicate connections
     if (
       wsRef.current &&
@@ -58,8 +67,8 @@ export function useSwarmWebSocket(url: string, token?: string) {
       return;
     }
 
-    // Append auth token as query parameter if provided
-    const authUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+    // Append auth token as query parameter
+    const authUrl = `${url}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(authUrl);
     wsRef.current = ws;
 
@@ -80,7 +89,7 @@ export function useSwarmWebSocket(url: string, token?: string) {
       );
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       setState((prev) => ({
         ...prev,
         isConnected: false,
@@ -93,8 +102,10 @@ export function useSwarmWebSocket(url: string, token?: string) {
         portfolioIntervalRef.current = null;
       }
 
-      // Auto-reconnect with exponential backoff (unless intentionally closed)
-      if (!intentionalCloseRef.current) {
+      // Do NOT reconnect on auth rejection (4003) — the token is invalid.
+      // Only reconnect on unexpected disconnects (network drops, server restarts).
+      const isAuthRejection = event.code === 4003;
+      if (!intentionalCloseRef.current && !isAuthRejection) {
         const delay = Math.min(
           RECONNECT_INTERVAL_MS * Math.pow(2, reconnectAttemptRef.current),
           MAX_RECONNECT_DELAY_MS

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSwarmWebSocket } from "@/hooks/useSwarmWebSocket";
-import { isAuthenticated, getToken, getUser, clearAuth, AuthUser } from "@/lib/auth";
+import { isAuthenticated, isTokenExpired, getToken, getUser, clearAuth, AuthUser } from "@/lib/auth";
 import SwarmDirectiveInput from "@/components/SwarmDirectiveInput";
 import AssetIntelligence from "@/components/AssetIntelligence";
 import MarketPulse from "@/components/MarketPulse";
@@ -26,6 +26,18 @@ export default function OmniAgentNexus() {
     }
     setToken(getToken());
     setUser(getUser());
+
+    // Periodically check if the token has expired while the user is on the
+    // dashboard. If so, clear auth and redirect to login instead of letting
+    // API calls silently fail with 401.
+    const expiryCheck = setInterval(() => {
+      if (isTokenExpired()) {
+        clearAuth();
+        router.replace("/login");
+      }
+    }, 60_000); // check every 60 seconds
+
+    return () => clearInterval(expiryCheck);
   }, [router]);
 
   const { state, deployDirective, resolveCheckpoint } = useSwarmWebSocket(
