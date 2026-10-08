@@ -80,11 +80,11 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "gemini-3.5-flash-lite",
     ]
 
-    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0])
+    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], max_retries=0)
     structured_llm = primary_llm.with_structured_output(OrchestratorDirective)
 
     fallbacks = [
-        ChatGoogleGenerativeAI(model=m).with_structured_output(OrchestratorDirective)
+        ChatGoogleGenerativeAI(model=m, max_retries=0).with_structured_output(OrchestratorDirective)
         for m in models_to_try[1:]
     ]
     structured_llm = structured_llm.with_fallbacks(fallbacks)
