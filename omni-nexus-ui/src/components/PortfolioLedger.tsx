@@ -470,7 +470,7 @@ export default function PortfolioLedger({
             </thead>
             <tbody>
               {positions.map((pos, index) => {
-                const posPositive = pos.current_price > 0;
+                const posPositive = pos.avg_cost > 0 ? pos.current_price >= pos.avg_cost : pos.current_price > 0;
                 return (
                   <tr
                     key={pos.ticker}

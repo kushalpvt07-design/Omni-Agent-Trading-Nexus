@@ -116,7 +116,22 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
             final_shares = None
             final_allocation = None
         else:
-            final_action = decision.action
+            # §4.2 — The LLM must not flip trade direction against the user's intent.
+            # If the user said BUY, the orchestrator can only confirm BUY, HOLD, or REJECT.
+            # If the user said SELL, the orchestrator can only confirm SELL, HOLD, or REJECT.
+            requested_action = state.get("requested_action") or decision.action
+            if requested_action in ("BUY", "SELL") and decision.action not in (
+                requested_action, "HOLD", "REJECT"
+            ):
+                logger.warning(
+                    "Orchestrator tried to flip action %s → %s for %s; overriding to HOLD.",
+                    requested_action, decision.action, active_ticker,
+                )
+                decision_action = "HOLD"
+            else:
+                decision_action = decision.action
+
+            final_action = decision_action
 
             # Mutually exclusive: allocation vs shares to prevent API double-execution
             if requested_quantity is not None and float(requested_quantity) > 0:
@@ -124,12 +139,16 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
                 final_allocation = None
             else:
                 final_shares = None
-                try:
-                    final_allocation = (
-                        float(raw_alloc) if raw_alloc is not None else 0.1
-                    )
-                except (ValueError, TypeError):
-                    final_allocation = 0.1
+                if final_action == "SELL":
+                    # §1.5 — No quantity = sell the entire position (risk desk handles it)
+                    final_allocation = None
+                else:
+                    try:
+                        final_allocation = (
+                            float(raw_alloc) if raw_alloc is not None else 0.1
+                        )
+                    except (ValueError, TypeError):
+                        final_allocation = 0.1
 
         proposed_trade = {
             "ticker": active_ticker,

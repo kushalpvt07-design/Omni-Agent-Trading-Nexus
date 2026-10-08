@@ -117,7 +117,7 @@ async def websocket_endpoint(
                     )
                     continue
 
-                is_approved = payload.get("approved", False)
+                is_approved = payload.get("approved") is True  # §4.4: "false" (str) must not approve
 
                 if is_approved:
                     audit_logger.info(
@@ -222,7 +222,7 @@ async def websocket_endpoint(
                 "user_id": user_id,
                 "username": username,
                 "messages": [HumanMessage(content=clean_directive)],
-                "paper_trading_enabled": payload.get("paper_trading", True),
+                "paper_trading_enabled": True,  # §4.4: always default paper; live flag is server-controlled
                 "quant_data": {},
                 "sentiment_data": {},
                 "current_ticker": None,
@@ -430,7 +430,10 @@ async def websocket_endpoint(
 
                 active_thread_id = None
 
-    except (WebSocketDisconnect, RuntimeError):
+    except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
+    except RuntimeError as e:
+        # §4.6 — RuntimeError from the pipeline must NOT be swallowed as a disconnect
+        logger.exception("Runtime error in WebSocket pipeline: %s", e)
     except Exception as e:
         logger.exception("Unhandled error in WebSocket loop")

@@ -64,10 +64,21 @@ async def get_portfolio(user=Depends(get_current_user)):
         market_value = round(shares * current_price, 2)
         total_market_value += market_value
 
+        # Fetch avg_cost for P&L icon (§5.6)
+        avg_cost = 0.0
+        with get_db() as conn:
+            pos_row = conn.execute(
+                "SELECT avg_cost FROM user_positions WHERE user_id = ? AND ticker = ?",
+                (user_id, ticker),
+            ).fetchone()
+            if pos_row and pos_row["avg_cost"]:
+                avg_cost = pos_row["avg_cost"]
+
         positions.append({
             "ticker": ticker,
             "shares": round(shares, 4),
             "current_price": round(current_price, 2),
+            "avg_cost": round(avg_cost, 4),
             "market_value": market_value,
         })
 

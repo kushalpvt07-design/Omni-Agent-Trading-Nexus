@@ -59,9 +59,17 @@ def get_live_asset_data(ticker_symbol: str):
         ticker = yf.Ticker(clean_ticker)
         hist = ticker.history(period="1mo")
 
-        # Smart fallback for crypto: if empty, try adding the -USD suffix
-        # (skip for Indian market tickers which already have their exchange suffix)
-        if hist.empty and not is_indian_market and "-" not in clean_ticker:
+        # Smart fallback for crypto: if empty, try adding the -USD suffix.
+        # §5.5 — Only do this for tickers that look like crypto (no dots, short,
+        # all alpha). An invalid stock ticker XYZ must NOT silently become XYZ-USD.
+        if (
+            hist.empty
+            and not is_indian_market
+            and "-" not in clean_ticker
+            and "." not in clean_ticker
+            and len(clean_ticker) <= 5
+            and clean_ticker.isalpha()
+        ):
             crypto_ticker = f"{clean_ticker}-USD"
             ticker = yf.Ticker(crypto_ticker)
             hist = ticker.history(period="1mo")
@@ -82,8 +90,10 @@ def get_live_asset_data(ticker_symbol: str):
             change_pct = 0.0
 
         returns = hist["Close"].pct_change().dropna()
+        # §5.5 — crypto trades 24/7/365; use √365 for annualization, not √252
+        annualization_days = 365 if is_indian_market is False and "-" in clean_ticker else 252
         volatility = (
-            float(returns.std() * (252**0.5) * 100) if not returns.empty else 0.0
+            float(returns.std() * (annualization_days**0.5) * 100) if not returns.empty else 0.0
         )
 
         if math.isnan(volatility):

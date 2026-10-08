@@ -32,7 +32,7 @@ export default function SwarmConsensus({ sentimentData }: { sentimentData: any }
 
   const label = sentimentData.sentiment_label || "NEUTRAL";
   const rawScore = sentimentData.sentiment_score || 0.5;
-  const isBullish = rawScore > 0.5;
+  const isBullish = rawScore > 0.6;  // matches backend: label="BULLISH" when score > 0.6
   const scorePercent = Math.round(rawScore * 100);
   const rotation = Math.max(0, Math.min((rawScore * 180), 180));
   const reasoning = sentimentData.reasoning || "No synthetic reasoning generated. Run a prompt to initiate swarm analysis.";

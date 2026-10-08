@@ -13,8 +13,8 @@ from src.state import FinancialSwarmState
 
 logger = logging.getLogger("omni-nexus.quant")
 
-# Error codes that should NOT be retried (permanent failures)
-_NON_RETRYABLE_ERRORS = {"AUTH_ERROR", "INVALID_TICKER"}
+# Error codes that should NOT be retried (permanent / deterministic failures)
+_NON_RETRYABLE_ERRORS = {"AUTH_ERROR", "INVALID_TICKER", "DATA_CORRUPT", "NO_DATA"}
 
 
 class AlpacaAuthError(Exception):

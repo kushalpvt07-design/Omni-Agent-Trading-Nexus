@@ -69,6 +69,10 @@ def update_user_ledger(
     total_value = round(shares * price, 2)
 
     with get_db() as conn:
+        # §3.2 — Use BEGIN IMMEDIATE so no other connection can read-then-write
+        # the same cash balance concurrently (prevents lost-update races).
+        conn.execute("BEGIN IMMEDIATE")
+
         # Get current cash
         row = conn.execute(
             "SELECT cash FROM user_ledger WHERE user_id = ?", (user_id,)
@@ -93,7 +97,29 @@ def update_user_ledger(
                 ) / new_shares
             else:
                 new_avg_cost = price
+
+            # §3.3 — Hard invariant: never allow negative cash at the ledger layer
+            if new_cash < 0:
+                conn.execute("ROLLBACK")
+                logger.warning(
+                    "Ledger invariant violated: BUY would overdraft user=%d (cash=%.2f, cost=%.2f)",
+                    user_id, cash, total_value,
+                )
+                raise ValueError(
+                    f"Insufficient cash: ${cash:,.2f} available, ${total_value:,.2f} required."
+                )
+
         elif action == "SELL":
+            # §3.3 — Hard invariant: cannot sell more than owned
+            if shares > current_shares + 1e-9:
+                conn.execute("ROLLBACK")
+                logger.warning(
+                    "Ledger invariant violated: SELL %.4f > owned %.4f for user=%d %s",
+                    shares, current_shares, user_id, ticker,
+                )
+                raise ValueError(
+                    f"Oversell rejected: tried to sell {shares:.4f} shares but only {current_shares:.4f} owned."
+                )
             new_cash = cash + total_value
             new_shares = current_shares - shares
             new_avg_cost = current_avg_cost  # avg cost doesn't change on sell
@@ -103,9 +129,10 @@ def update_user_ledger(
             new_shares = current_shares
             new_avg_cost = current_avg_cost
 
-        # Update cash
+        # §3.4 — UPSERT the ledger row so a missing row never causes a silent no-op
         conn.execute(
-            "UPDATE user_ledger SET cash = ? WHERE user_id = ?",
+            """INSERT INTO user_ledger (user_id, cash) VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET cash = excluded.cash""",
             (round(new_cash, 2), user_id),
         )
 
@@ -253,8 +280,9 @@ def _lerp(v0: float, v1: float, t: float) -> float:
 def get_portfolio_history(user_id: int, timeframe: str = "ALL") -> List[Dict[str, Any]]:
     """Return portfolio history with synthetic data points spanning the full timeframe.
 
-    Generates evenly-spaced data points so the chart always covers the full
-    requested time window instead of only showing data recorded since login.
+    Uses Last-Observation-Carried-Forward (LOCF / step-function) instead of
+    linear interpolation (§5.2). A trade loss recorded today should not appear
+    as a smooth decline starting weeks earlier.
 
     Supported timeframes: 1D, 1M, 1Y, ALL.
     """
@@ -338,52 +366,27 @@ def get_portfolio_history(user_id: int, timeframe: str = "ALL") -> List[Dict[str
         t = window_start + timedelta(seconds=interval_seconds * i)
         timeline.append(t)
 
-    # Build output by interpolating between real snapshots
+    # §5.2 — Step / Last-Observation-Carried-Forward (LOCF) instead of lerp.
+    # Build output by carrying the last known value forward to each timeline point.
+    # Snapshots after a given point are ignored; we only use the latest snapshot
+    # that is at or before the timeline point.
     result: List[Dict[str, Any]] = []
 
-    # Create a sorted list of all "anchor" points: baseline + real snapshots + now
-    anchors = [{"dt": window_start, "total_value": baseline_value, "cash": baseline_cash}]
-    anchors.extend(snapshots)
-    # Extend last known value to now
-    if snapshots:
-        anchors.append({"dt": now, "total_value": snapshots[-1]["total_value"], "cash": snapshots[-1]["cash"]})
-    else:
-        anchors.append({"dt": now, "total_value": baseline_value, "cash": baseline_cash})
-
-    # Sort anchors by time
-    anchors.sort(key=lambda a: a["dt"])
-
-    # For each timeline point, find the two surrounding anchors and interpolate
     for t in timeline:
-        # Find the right anchor index (first anchor at or after t)
-        right_idx = 0
-        for idx, a in enumerate(anchors):
-            if a["dt"] >= t:
-                right_idx = idx
-                break
-        else:
-            right_idx = len(anchors) - 1
-
-        left_idx = max(right_idx - 1, 0)
-
-        left = anchors[left_idx]
-        right = anchors[right_idx]
-
-        # Interpolation factor
-        seg_duration = (right["dt"] - left["dt"]).total_seconds()
-        if seg_duration > 0:
-            frac = (t - left["dt"]).total_seconds() / seg_duration
-            frac = max(0.0, min(1.0, frac))
-        else:
-            frac = 0.0
-
-        interp_value = round(_lerp(left["total_value"], right["total_value"], frac), 2)
-        interp_cash = round(_lerp(left["cash"], right["cash"], frac), 2)
+        # Find the latest snapshot at or before t
+        current_value = baseline_value
+        current_cash = baseline_cash
+        for snap in snapshots:
+            if snap["dt"] <= t:
+                current_value = snap["total_value"]
+                current_cash = snap["cash"]
+            else:
+                break  # snapshots are sorted ascending; no need to look further
 
         result.append({
             "timestamp": t.isoformat(),
-            "total_value": interp_value,
-            "cash": interp_cash,
+            "total_value": round(current_value, 2),
+            "cash": round(current_cash, 2),
         })
 
     return result

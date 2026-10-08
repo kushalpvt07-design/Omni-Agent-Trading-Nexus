@@ -2,11 +2,13 @@ import json
 import os
 import math
 import logging
+import numpy as np
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import Adjustment
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -80,6 +82,11 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         )
 
     try:
+        # ── Indian stocks: route to yfinance (Alpaca has no NSE/BSE data) ──
+        is_indian = ticker_upper.endswith(".NS") or ticker_upper.endswith(".BO")
+        if is_indian:
+            return _fetch_yfinance_quant(ticker_upper)
+
         # Alpaca requires timezone-aware datetime objects
         start_date = datetime.now(timezone.utc) - timedelta(days=45)
 
@@ -98,6 +105,8 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
                 symbol_or_symbols=[ticker_upper],
                 timeframe=TimeFrame.Day,
                 start=start_date,
+                # §2.2 — use split+dividend adjusted prices to avoid artefacts
+                adjustment=Adjustment.ALL,
             )
             bars = client.get_stock_bars(request_params).df
 
@@ -111,31 +120,49 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             )
 
         closes = bars["close"].tail(30)
-        std_dev = float(closes.std()) if len(closes) > 1 else 0.0
-        sma = float(closes.mean())
         latest_close = float(closes.iloc[-1])
-        raw_vol = bars["volume"].iloc[-1]
-        latest_volume = int(raw_vol) if not math.isnan(raw_vol) else 0
+        sma = float(closes.mean())
 
-        # Data integrity check — reject if price deviates > 50% from SMA
-        if sma > 0 and abs(latest_close - sma) / sma > 0.5:
-            return json.dumps(
-                {
-                    "status": "error",
-                    "error_code": "DATA_CORRUPT",
-                    "message": f"DATA_CORRUPT: Live price ({latest_close}) deviates from 30-day SMA ({sma}) by > 50%. Possible proxy mismatch or split anomaly.",
-                }
-            )
+        # §2.3 — Catch splits/bad ticks via day-over-day jump, not SMA deviation
+        # A >50% single-day jump is almost always a data error or unhandled split.
+        if len(closes) >= 2:
+            prev_close = float(closes.iloc[-2])
+            if prev_close > 0 and abs(latest_close - prev_close) / prev_close > 0.5:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "DATA_CORRUPT",
+                        "message": (
+                            f"DATA_CORRUPT: {ticker_upper} moved more than 50% day-over-day "
+                            f"({prev_close:.4f} → {latest_close:.4f}). Possible split or bad tick."
+                        ),
+                    }
+                )
+
+        # §1.1 / §1.2 — Volatility from log-returns, full precision, annualized
+        # std of price *levels* conflates trend with noise; log-returns do not.
+        annualization_factor = math.sqrt(365) if asset_class == "crypto" else math.sqrt(252)
+        log_returns = np.log(closes / closes.shift(1)).dropna()
+        if len(log_returns) >= 2:
+            daily_vol = float(log_returns.std())
+            annualized_vol = daily_vol * annualization_factor
+        else:
+            daily_vol = 0.0
+            annualized_vol = 0.0
+
+        raw_vol = bars["volume"].iloc[-1]
+        # §2.5 — round() instead of int() to preserve fractional crypto volume
+        latest_volume = round(float(raw_vol)) if not math.isnan(raw_vol) else 0
 
         history_data = []
-        for idx, row in bars.tail(5).iterrows():
+        for idx, row in bars.tail(30).iterrows():
             ts = idx[1] if isinstance(idx, tuple) else idx
             date_str = pd.to_datetime(ts).strftime("%Y-%m-%d")
 
             close_val = row.get("close") if "close" in row else row.get("Close")
             vol_val = row.get("volume") if "volume" in row else row.get("Volume")
             vol_clean = (
-                int(vol_val)
+                round(float(vol_val))
                 if vol_val is not None and not math.isnan(float(vol_val))
                 else 0
             )
@@ -143,7 +170,7 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             history_data.append(
                 {
                     "date": date_str,
-                    "close": round(float(close_val), 2),
+                    "close": round(float(close_val), 4),
                     "volume": vol_clean,
                 }
             )
@@ -155,8 +182,14 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             "ticker": ticker_upper,
             "latest_close": latest_close,
             "latest_volume": latest_volume,
+            # §2.6 — also expose SMA and returns-based stats for the LLM
+            "thirty_day_sma": round(sma, 4),
             "volatility_metrics": {
-                "30_day_standard_deviation": round(std_dev, 2),
+                # Full precision — no more rounding to 2 dp before risk desk (§1.2)
+                "daily_log_return_std": daily_vol,
+                "annualized_volatility": annualized_vol,
+                # Keep legacy key so older consumers don't break
+                "30_day_standard_deviation": daily_vol,
             },
             "thirty_day_trend": history_data,
         }
@@ -193,6 +226,95 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         )
 
 
+def _fetch_yfinance_quant(ticker_upper: str) -> str:
+    """Fetch quant data for Indian market stocks via yfinance.
+
+    §2.1 — Alpaca has no NSE/BSE data. All .NS/.BO tickers are routed here.
+    """
+    try:
+        import yfinance as yf
+
+        stock = yf.Ticker(ticker_upper)
+        hist = stock.history(period="45d")  # adjusted by default in yfinance
+
+        if hist.empty:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "error_code": "NO_DATA",
+                    "message": f"No data found for Indian ticker {ticker_upper} via yfinance.",
+                }
+            )
+
+        closes = hist["Close"].tail(30)
+        latest_close = float(closes.iloc[-1])
+        sma = float(closes.mean())
+
+        # Day-over-day jump check
+        if len(closes) >= 2:
+            prev_close = float(closes.iloc[-2])
+            if prev_close > 0 and abs(latest_close - prev_close) / prev_close > 0.5:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "DATA_CORRUPT",
+                        "message": (
+                            f"DATA_CORRUPT: {ticker_upper} moved >50% day-over-day "
+                            f"({prev_close:.4f} → {latest_close:.4f})."
+                        ),
+                    }
+                )
+
+        log_returns = np.log(closes / closes.shift(1)).dropna()
+        if len(log_returns) >= 2:
+            daily_vol = float(log_returns.std())
+            annualized_vol = daily_vol * math.sqrt(252)
+        else:
+            daily_vol = 0.0
+            annualized_vol = 0.0
+
+        raw_vol = hist["Volume"].iloc[-1]
+        latest_volume = round(float(raw_vol)) if not math.isnan(float(raw_vol)) else 0
+
+        history_data = []
+        for date, row in hist.tail(30).iterrows():
+            close_val = float(row["Close"])
+            vol_val = float(row["Volume"]) if not math.isnan(float(row["Volume"])) else 0
+            history_data.append(
+                {
+                    "date": date.strftime("%Y-%m-%d"),
+                    "close": round(close_val, 4),
+                    "volume": round(vol_val),
+                }
+            )
+        history_data.reverse()
+
+        return json.dumps(
+            {
+                "status": "success",
+                "ticker": ticker_upper,
+                "latest_close": latest_close,
+                "latest_volume": latest_volume,
+                "thirty_day_sma": round(sma, 4),
+                "volatility_metrics": {
+                    "daily_log_return_std": daily_vol,
+                    "annualized_volatility": annualized_vol,
+                    "30_day_standard_deviation": daily_vol,
+                },
+                "thirty_day_trend": history_data,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        logger.exception("yfinance quant fetch failed for %s", ticker_upper)
+        return json.dumps(
+            {
+                "status": "error",
+                "error_code": "DATA_FETCH_ERROR",
+                "message": f"Failed to retrieve yfinance data for {ticker_upper}: {str(e)}",
+            }
+        )
+
+
 if __name__ == "__main__":
     mcp.run()
-

@@ -38,6 +38,25 @@ class TradeDirectiveSchema(BaseModel):
     )
     risk_threshold: Optional[float] = Field(default=0.5)
 
+    @field_validator("quantity")
+    @classmethod
+    def validate_quantity(cls, value: Optional[float]) -> Optional[float]:
+        """§1.6 — Reject negative or zero share quantities."""
+        if value is not None and value <= 0:
+            return None  # treat nonsensical quantities as unspecified
+        return value
+
+    @field_validator("allocation")
+    @classmethod
+    def clamp_allocation(cls, value: Optional[float]) -> Optional[float]:
+        """§1.6 — LLMs sometimes return 50 for '50%'. Clamp to [0, 1]."""
+        if value is None:
+            return value
+        # If the LLM returned a percentage (e.g. 25 meaning 25%), convert it
+        if value > 1.0:
+            value = value / 100.0
+        return max(0.0, min(1.0, value))
+
     @field_validator("ticker")
     @classmethod
     def normalize_ticker_format(cls, value: Optional[str]) -> Optional[str]:

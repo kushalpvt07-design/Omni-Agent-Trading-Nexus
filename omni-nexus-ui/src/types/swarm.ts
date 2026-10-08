@@ -54,6 +54,7 @@ export interface PortfolioPosition {
   ticker: string;
   shares: number;
   current_price: number;
+  avg_cost: number;
   market_value: number;
 }
 

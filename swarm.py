@@ -26,6 +26,27 @@ def route_after_orchestrator(state: FinancialSwarmState):
     return "risk_agent_node"
 
 
+def route_after_risk(state: FinancialSwarmState):
+    """§4.1 — Only send to the HITL execution checkpoint when risk approved
+    a real BUY or SELL order. HOLDs and risk-rejected overrides skip straight
+    to END so they never show the human-approval modal.
+    """
+    if not state.get("risk_approved", False):
+        return END
+
+    proposed_trade = state.get("proposed_trade", {})
+    action = ""
+    if hasattr(proposed_trade, "action"):
+        action = str(proposed_trade.action).upper()
+    elif isinstance(proposed_trade, dict):
+        action = str(proposed_trade.get("action", "")).upper()
+
+    if action not in ("BUY", "SELL"):
+        return END
+
+    return "execution_agent_node"
+
+
 def build_graph():
     """Constructs the LangGraph state machine. Returns an uncompiled builder
     so that callers (main.py) can attach checkpointers and interrupt points."""
@@ -50,7 +71,12 @@ def build_graph():
         {"risk_agent_node": "risk_agent_node", END: END},
     )
 
-    builder.add_edge("risk_agent_node", "execution_agent_node")
+    # §4.1 — Conditional edge: only approved BUY/SELL trades reach execution/HITL
+    builder.add_conditional_edges(
+        "risk_agent_node",
+        route_after_risk,
+        {"execution_agent_node": "execution_agent_node", END: END},
+    )
     builder.add_edge("execution_agent_node", END)
 
     return builder
