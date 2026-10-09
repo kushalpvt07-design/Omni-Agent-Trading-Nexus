@@ -133,7 +133,7 @@ def update_user_ledger(
         conn.execute(
             """INSERT INTO user_ledger (user_id, cash) VALUES (?, ?)
                ON CONFLICT(user_id) DO UPDATE SET cash = excluded.cash""",
-            (round(new_cash, 2), user_id),
+            (int(user_id), round(new_cash, 2)),
         )
 
         # Update or insert position

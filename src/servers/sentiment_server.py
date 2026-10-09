@@ -3,6 +3,9 @@ import logging
 import yfinance as yf
 import requests
 from mcp.server.fastmcp import FastMCP
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("omni-nexus.sentiment-server")
 
@@ -90,34 +93,55 @@ def analyze_market_sentiment(ticker: str, asset_class: str = "equity") -> str:
             yf_ticker = clean_ticker
 
     try:
-        with requests.Session() as clean_session:
-            clean_session.headers.update(
-                {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                }
-            )
-            stock = yf.Ticker(yf_ticker, session=clean_session)
-            news = stock.news
-
-            # Fallback for Indian stocks: try base ticker without .NS/.BO suffix
-            # Yahoo Finance often has better news coverage without exchange suffixes
-            if (not news or len(news) == 0) and is_indian_market:
-                base_ticker = yf_ticker.rsplit(".", 1)[0]
-                logger.info(
-                    "No news for %s, retrying with base ticker %s",
-                    yf_ticker, base_ticker,
-                )
-                fallback_stock = yf.Ticker(base_ticker, session=clean_session)
-                news = fallback_stock.news
-
         headlines = []
-        if news:
-            for item in news[:5]:
-                content = item.get("content", {})
-                title = content.get("title") or item.get("title", "")
-                summary = content.get("summary") or item.get("summary", "")
-                if title:
-                    headlines.append(f"Title: {title} | Summary: {summary}")
+        if is_indian_market:
+            # Fallback to yfinance for Indian markets (Alpaca doesn't support them)
+            with requests.Session() as clean_session:
+                clean_session.headers.update(
+                    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+                )
+                base_ticker = yf_ticker.rsplit(".", 1)[0]
+                stock = yf.Ticker(base_ticker, session=clean_session)
+                news = stock.news
+                if news:
+                    for item in news[:5]:
+                        content = item.get("content", {})
+                        title = content.get("title") or item.get("title", "")
+                        summary = content.get("summary") or item.get("summary", "")
+                        if title:
+                            headlines.append(f"Title: {title} | Summary: {summary}")
+        else:
+            # Use Alpaca News API for US stocks and Crypto
+            import os
+            from alpaca.data.historical import NewsClient
+            from alpaca.data.requests import NewsRequest
+            
+            api_key = os.environ.get("ALPACA_API_KEY")
+            secret_key = os.environ.get("ALPACA_SECRET_KEY")
+            
+            if api_key and secret_key:
+                client = NewsClient(api_key, secret_key)
+                req = NewsRequest(symbols=clean_ticker, limit=5)
+                news_items = client.get_news(req)
+                
+                items_list = []
+                if hasattr(news_items, "news"):
+                    items_list = news_items.news
+                elif hasattr(news_items, "dict"):
+                    items_list = news_items.dict().get("news", [])
+                    
+                for item in items_list:
+                    if isinstance(item, dict):
+                        title = item.get("headline", "")
+                        summary = item.get("summary", "")
+                    else:
+                        title = getattr(item, "headline", "")
+                        summary = getattr(item, "summary", "")
+                    
+                    if title:
+                        headlines.append(f"Title: {title} | Summary: {summary}")
+            else:
+                logger.warning("Alpaca API keys not found, cannot fetch news.")
 
         if not headlines:
             headlines.append(f"No recent news found for {yf_ticker}.")

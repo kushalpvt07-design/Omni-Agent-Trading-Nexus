@@ -80,15 +80,6 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         "gemini-3.5-flash-lite",
     ]
 
-    primary_llm = ChatGoogleGenerativeAI(model=models_to_try[0], max_retries=0)
-    structured_llm = primary_llm.with_structured_output(OrchestratorDirective)
-
-    fallbacks = [
-        ChatGoogleGenerativeAI(model=m, max_retries=0).with_structured_output(OrchestratorDirective)
-        for m in models_to_try[1:]
-    ]
-    structured_llm = structured_llm.with_fallbacks(fallbacks)
-
     system_prompt = (
         "You are an elite autonomous financial orchestrator. "
         "Analyze the provided quantitative data and qualitative market sentiment to make a final trading decision. "
@@ -107,10 +98,23 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
     logger.info("Pacing API request — waiting 3 seconds to avoid rate limits")
     await asyncio.sleep(3)
 
+    decision = None
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            llm = ChatGoogleGenerativeAI(model=model_name, max_retries=0)
+            structured_llm = llm.with_structured_output(OrchestratorDirective)
+            decision = await _invoke_llm_with_backoff(structured_llm, system_prompt, analysis_context)
+            if decision:
+                break
+        except Exception as e:
+            logger.warning(f"Model {model_name} failed: {e}")
+            last_error = e
+            continue
+
     try:
-        decision: OrchestratorDirective = await _invoke_llm_with_backoff(
-            structured_llm, system_prompt, analysis_context
-        )
+        if not decision:
+            raise last_error or Exception("All models failed")
 
         if decision.action == "REJECT":
             final_action = "REJECT"

@@ -14,6 +14,8 @@ def _build_chart_data(hist, time_format="%d/%m"):
     chart_data = []
     for date, row in hist.iterrows():
         close_val = float(row["Close"])
+        if math.isnan(close_val):
+            continue
         open_val = float(row["Open"]) if "Open" in row and not math.isnan(float(row["Open"])) else close_val
         high_val = float(row["High"]) if "High" in row and not math.isnan(float(row["High"])) else close_val
         low_val = float(row["Low"]) if "Low" in row and not math.isnan(float(row["Low"])) else close_val
@@ -75,6 +77,10 @@ def get_live_asset_data(ticker_symbol: str):
             hist = ticker.history(period="1mo")
             clean_ticker = crypto_ticker
 
+        if hist.empty:
+            return None
+
+        hist = hist.dropna(subset=["Close"])
         if hist.empty:
             return None
 
