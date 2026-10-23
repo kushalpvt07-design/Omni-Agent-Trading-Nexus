@@ -23,23 +23,12 @@ mcp = FastMCP("QuantServer")
 
 
 def _is_auth_error(exc: Exception) -> bool:
-    """Detect HTTP 401/403 authentication failures from Alpaca SDK exceptions.
-
-    The Alpaca SDK wraps HTTP errors in various exception types across versions.
-    This helper inspects the exception chain to reliably detect auth failures
-    regardless of SDK version.
-    """
+    """Detect HTTP 401/403 authentication failures from Alpaca SDK exceptions."""
     error_str = str(exc).lower()
-
-    # Direct status-code mentions in the exception message
     if any(code in error_str for code in ("401", "403", "unauthorized", "forbidden")):
         return True
-
-    # Alpaca SDK may expose the HTTP status via a `status_code` attribute
     if hasattr(exc, "status_code") and getattr(exc, "status_code", None) in (401, 403):
         return True
-
-    # Walk the exception chain (e.g. HTTPError wrapped inside an SDK error)
     cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
     if cause is not None:
         cause_str = str(cause).lower()
@@ -50,8 +39,26 @@ def _is_auth_error(exc: Exception) -> bool:
             if resp is not None and hasattr(resp, "status_code"):
                 if resp.status_code in (401, 403):
                     return True
-
     return False
+
+
+def compute_wilder_rsi(closes: pd.Series, period: int = 14) -> float:
+    """Compute Wilder's smoothed Relative Strength Index (RSI) over the given period."""
+    clean = closes.dropna()
+    if len(clean) < period + 1:
+        return 50.0
+    delta = clean.diff().dropna()
+    gains = delta.clip(lower=0.0)
+    losses = -delta.clip(upper=0.0)
+
+    avg_gain = gains.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean().iloc[-1]
+    avg_loss = losses.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean().iloc[-1]
+
+    if avg_loss == 0.0:
+        return 100.0 if avg_gain > 0.0 else 50.0
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return round(float(rsi), 2) if not math.isnan(rsi) else 50.0
 
 
 @mcp.tool()
@@ -67,7 +74,10 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
             }
         )
 
-    # ── Fast-fail: validate credentials before making any API call ───
+    is_indian = ticker_upper.endswith(".NS") or ticker_upper.endswith(".BO")
+    if is_indian:
+        return _fetch_yfinance_quant(ticker_upper)
+
     if not api_key or not secret_key:
         logger.error("Alpaca API credentials are missing from environment variables.")
         return json.dumps(
@@ -82,15 +92,10 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         )
 
     try:
-        # ── Indian stocks: route to yfinance (Alpaca has no NSE/BSE data) ──
-        is_indian = ticker_upper.endswith(".NS") or ticker_upper.endswith(".BO")
-        if is_indian:
-            return _fetch_yfinance_quant(ticker_upper)
+        # 60 calendar days guarantees >= 30 trading days even across holiday weeks (BUG-011)
+        start_date = datetime.now(timezone.utc) - timedelta(days=60)
 
-        # Alpaca requires timezone-aware datetime objects
-        start_date = datetime.now(timezone.utc) - timedelta(days=45)
-
-        if asset_class == "crypto":
+        if asset_class == "crypto" or "/" in ticker_upper:
             alpaca_ticker = ticker_upper.replace("-", "/")
             client = CryptoHistoricalDataClient(api_key, secret_key)
             request_params = CryptoBarsRequest(
@@ -105,7 +110,6 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
                 symbol_or_symbols=[ticker_upper],
                 timeframe=TimeFrame.Day,
                 start=start_date,
-                # §2.2 — use split+dividend adjusted prices to avoid artefacts
                 adjustment=Adjustment.ALL,
             )
             bars = client.get_stock_bars(request_params).df
@@ -123,8 +127,6 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         latest_close = float(closes.iloc[-1])
         sma = float(closes.mean())
 
-        # §2.3 — Catch splits/bad ticks via day-over-day jump, not SMA deviation
-        # A >50% single-day jump is almost always a data error or unhandled split.
         if len(closes) >= 2:
             prev_close = float(closes.iloc[-2])
             if prev_close > 0 and abs(latest_close - prev_close) / prev_close > 0.5:
@@ -139,21 +141,26 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
                     }
                 )
 
-        # §1.1 / §1.2 — Volatility from log-returns, full precision, annualized
-        # std of price *levels* conflates trend with noise; log-returns do not.
-        annualization_factor = math.sqrt(365) if asset_class == "crypto" else math.sqrt(252)
+        annualization_factor = (
+            math.sqrt(365) if (asset_class == "crypto" or "/" in ticker_upper) else math.sqrt(252)
+        )
         log_returns = np.log(closes / closes.shift(1)).dropna()
         if len(log_returns) >= 2:
-            daily_vol = float(log_returns.std())
+            daily_vol = float(log_returns.std(ddof=1))
             annualized_vol = daily_vol * annualization_factor
         else:
             daily_vol = 0.0
             annualized_vol = 0.0
 
-        raw_vol = bars["volume"].iloc[-1]
-        # §2.5 — round() instead of int() to preserve fractional crypto volume
-        latest_volume = round(float(raw_vol)) if not math.isnan(raw_vol) else 0
+        rsi_14 = compute_wilder_rsi(bars["close"], period=14)
 
+        vols_30 = bars["volume"].tail(30).dropna()
+        raw_vol = float(bars["volume"].iloc[-1])
+        latest_volume = round(raw_vol) if not math.isnan(raw_vol) else 0
+        avg_vol_30 = float(vols_30.mean()) if not vols_30.empty else 0.0
+        volume_ratio_30d = round(latest_volume / avg_vol_30, 2) if avg_vol_30 > 0 else 1.0
+
+        # Keep chronological order (oldest -> newest) so LLM reads trend direction accurately (BUG-010)
         history_data = []
         for idx, row in bars.tail(30).iterrows():
             ts = idx[1] if isinstance(idx, tuple) else idx
@@ -175,20 +182,17 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
                 }
             )
 
-        history_data.reverse()
-
         payload = {
             "status": "success",
             "ticker": ticker_upper,
             "latest_close": latest_close,
             "latest_volume": latest_volume,
-            # §2.6 — also expose SMA and returns-based stats for the LLM
             "thirty_day_sma": round(sma, 4),
+            "rsi_14": rsi_14,
+            "volume_ratio_30d": volume_ratio_30d,
             "volatility_metrics": {
-                # Full precision — no more rounding to 2 dp before risk desk (§1.2)
                 "daily_log_return_std": daily_vol,
                 "annualized_volatility": annualized_vol,
-                # Keep legacy key so older consumers don't break
                 "30_day_standard_deviation": daily_vol,
             },
             "thirty_day_trend": history_data,
@@ -197,11 +201,9 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
         return json.dumps(payload, indent=2)
 
     except Exception as e:
-        # ── Classify the failure for upstream agents ──────────────────
         if _is_auth_error(e):
             logger.error(
-                "AUTH_ERROR for %s: Alpaca rejected credentials (HTTP 401/403). "
-                "Regenerate your API keys at https://app.alpaca.markets/",
+                "AUTH_ERROR for %s: Alpaca rejected credentials (HTTP 401/403).",
                 ticker_upper,
             )
             return json.dumps(
@@ -210,8 +212,7 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
                     "error_code": "AUTH_ERROR",
                     "message": (
                         f"Alpaca authentication failed for {ticker_upper} (HTTP 401/403). "
-                        "Your API keys may be expired, revoked, or incorrectly configured. "
-                        "Regenerate them at https://app.alpaca.markets/ and update your .env file."
+                        "Your API keys may be expired, revoked, or incorrectly configured."
                     ),
                 }
             )
@@ -227,15 +228,12 @@ def get_daily_close_price(ticker: str, asset_class: str = "equity") -> str:
 
 
 def _fetch_yfinance_quant(ticker_upper: str) -> str:
-    """Fetch quant data for Indian market stocks via yfinance.
-
-    §2.1 — Alpaca has no NSE/BSE data. All .NS/.BO tickers are routed here.
-    """
+    """Fetch quant data for Indian market stocks via yfinance."""
     try:
         import yfinance as yf
 
         stock = yf.Ticker(ticker_upper)
-        hist = stock.history(period="45d")  # adjusted by default in yfinance
+        hist = stock.history(period="60d")
 
         if hist.empty:
             return json.dumps(
@@ -246,11 +244,10 @@ def _fetch_yfinance_quant(ticker_upper: str) -> str:
                 }
             )
 
-        closes = hist["Close"].tail(30)
+        closes = hist["Close"].dropna().tail(30)
         latest_close = float(closes.iloc[-1])
         sma = float(closes.mean())
 
-        # Day-over-day jump check
         if len(closes) >= 2:
             prev_close = float(closes.iloc[-2])
             if prev_close > 0 and abs(latest_close - prev_close) / prev_close > 0.5:
@@ -267,15 +264,21 @@ def _fetch_yfinance_quant(ticker_upper: str) -> str:
 
         log_returns = np.log(closes / closes.shift(1)).dropna()
         if len(log_returns) >= 2:
-            daily_vol = float(log_returns.std())
+            daily_vol = float(log_returns.std(ddof=1))
             annualized_vol = daily_vol * math.sqrt(252)
         else:
             daily_vol = 0.0
             annualized_vol = 0.0
 
-        raw_vol = hist["Volume"].iloc[-1]
-        latest_volume = round(float(raw_vol)) if not math.isnan(float(raw_vol)) else 0
+        rsi_14 = compute_wilder_rsi(hist["Close"].dropna(), period=14)
 
+        vols_30 = hist["Volume"].tail(30).dropna()
+        raw_vol = float(hist["Volume"].iloc[-1])
+        latest_volume = round(raw_vol) if not math.isnan(raw_vol) else 0
+        avg_vol_30 = float(vols_30.mean()) if not vols_30.empty else 0.0
+        volume_ratio_30d = round(latest_volume / avg_vol_30, 2) if avg_vol_30 > 0 else 1.0
+
+        # Keep chronological order (oldest -> newest)
         history_data = []
         for date, row in hist.tail(30).iterrows():
             close_val = float(row["Close"])
@@ -287,7 +290,6 @@ def _fetch_yfinance_quant(ticker_upper: str) -> str:
                     "volume": round(vol_val),
                 }
             )
-        history_data.reverse()
 
         return json.dumps(
             {
@@ -296,6 +298,8 @@ def _fetch_yfinance_quant(ticker_upper: str) -> str:
                 "latest_close": latest_close,
                 "latest_volume": latest_volume,
                 "thirty_day_sma": round(sma, 4),
+                "rsi_14": rsi_14,
+                "volume_ratio_30d": volume_ratio_30d,
                 "volatility_metrics": {
                     "daily_log_return_std": daily_vol,
                     "annualized_volatility": annualized_vol,
