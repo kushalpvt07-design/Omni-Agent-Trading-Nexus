@@ -1,22 +1,20 @@
 """
 src.api.routes.analyze — Stateless single-shot trade analysis endpoint.
-
-Accepts a natural-language trading directive, runs it through the
-full swarm pipeline (without HITL checkpoint), and returns the result.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+import time
+from fastapi import APIRouter, HTTPException, Depends, Request
 
 from schemas import TradeRequest, TradeResponse
 from langchain_core.messages import HumanMessage
 from swarm import build_graph
 from src.core.config import logger, audit_logger
 from src.core.security import sanitize_raw_input
-from src.api.middleware.auth import verify_api_key
+from src.core.telemetry import telemetry
+from src.api.middleware.auth import verify_api_key, verify_ws_token
 
 router = APIRouter(prefix="/api/v1", tags=["Trading"])
 
-# Lazy-initialized stateless swarm (no checkpointer, no HITL)
 _stateless_swarm = None
 
 
@@ -28,16 +26,34 @@ def _get_stateless_swarm():
 
 
 @router.post("/analyze", response_model=TradeResponse)
-async def analyze_trade(request: TradeRequest, _=Depends(verify_api_key)):
+async def analyze_trade(
+    request: TradeRequest,
+    http_request: Request,
+    _=Depends(verify_api_key),
+):
     audit_logger.info("REST /api/v1/analyze — directive received")
+    start_ns = time.perf_counter_ns()
     try:
         clean_directive = sanitize_raw_input(request.directive)
 
+        # Resolve optional Bearer JWT so Risk Desk uses the user's real ledger when available (BUG-018)
+        user_id = None
+        username = None
+        auth_header = http_request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            user_info = verify_ws_token(auth_header[7:])
+            if user_info:
+                user_id = user_info["user_id"]
+                username = user_info["username"]
+
         initial_state = {
+            "user_id": user_id,
+            "username": username,
             "messages": [HumanMessage(content=clean_directive)],
             "paper_trading_enabled": request.paper_trading,
             "quant_data": {},
             "sentiment_data": {},
+            "node_latencies_ms": {},
             "current_ticker": None,
             "asset_class": "equity",
             "requested_action": None,
@@ -52,6 +68,8 @@ async def analyze_trade(request: TradeRequest, _=Depends(verify_api_key)):
         }
 
         final_state = await _get_stateless_swarm().ainvoke(initial_state)
+        elapsed_ms = (time.perf_counter_ns() - start_ns) / 1_000_000.0
+        telemetry.record_pipeline_run(elapsed_ms)
 
         if final_state.get("errors"):
             return TradeResponse(

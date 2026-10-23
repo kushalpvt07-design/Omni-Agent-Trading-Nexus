@@ -1,14 +1,9 @@
 """
 src.api.routes.swarm_stream — Real-time WebSocket trading pipeline.
-
-Handles the full lifecycle of a swarm trading session:
-1. Authenticate via token query parameter
-2. Stream directive through all agent nodes
-3. Pause at HITL checkpoint for human approval
-4. Resume execution or cancel based on user decision
 """
 
 import json
+import time
 import uuid
 import asyncio
 
@@ -19,12 +14,12 @@ from swarm import build_graph
 from utils import get_live_asset_data
 from src.core.config import logger, audit_logger
 from src.core.security import sanitize_raw_input
+from src.core.telemetry import telemetry
 from src.api.middleware.auth import verify_ws_token
 from src.persistence.checkpointer import get_checkpointer
-from src.persistence.user_portfolio import get_user_ledger
+from src.persistence.user_portfolio import build_full_portfolio_summary
 
 router = APIRouter(tags=["Trading"])
-
 
 PHASE_LABELS = {
     "parser_node": "Parser Agent: Extracting structured parameters from prompt...",
@@ -41,17 +36,12 @@ async def websocket_endpoint(
     websocket: WebSocket,
     token: str | None = Query(default=None),
 ):
-    # Authenticate via JWT before accepting the connection
     user = verify_ws_token(token)
     if not user:
         audit_logger.warning(
             "WebSocket auth failed from %s — closing",
             websocket.client.host if websocket.client else "unknown",
         )
-        # Must accept() before close() so Starlette sends a proper WS close
-        # frame (4003) rather than rejecting the HTTP upgrade with a 403.
-        # A 403 looks like a network error to the client and triggers the
-        # reconnect loop; a 4003 WS close is a clean, intentional rejection.
         await websocket.accept()
         await websocket.close(code=4003, reason="Authentication failed")
         return
@@ -62,7 +52,8 @@ async def websocket_endpoint(
     await websocket.accept()
     audit_logger.info(
         "WebSocket connected — user=%s (id=%d) from %s",
-        username, user_id,
+        username,
+        user_id,
         websocket.client.host if websocket.client else "unknown",
     )
 
@@ -117,12 +108,10 @@ async def websocket_endpoint(
                     )
                     continue
 
-                is_approved = payload.get("approved") is True  # §4.4: "false" (str) must not approve
+                is_approved = payload.get("approved") is True
 
                 if is_approved:
-                    audit_logger.info(
-                        "HITL APPROVED — thread=%s", active_thread_id
-                    )
+                    audit_logger.info("HITL APPROVED — thread=%s", active_thread_id)
                     await websocket.send_json(
                         {
                             "type": "message",
@@ -134,9 +123,7 @@ async def websocket_endpoint(
                         config, {"human_approved": True}
                     )
                 else:
-                    audit_logger.info(
-                        "HITL REJECTED — thread=%s", active_thread_id
-                    )
+                    audit_logger.info("HITL REJECTED — thread=%s", active_thread_id)
                     await websocket.send_json(
                         {
                             "type": "message",
@@ -190,15 +177,19 @@ async def websocket_endpoint(
                     }
                 )
 
-                # Push updated portfolio to frontend
+                # Push enriched portfolio summary matching PortfolioData interface (BUG-002)
                 try:
-                    ledger = get_user_ledger(user_id)
-                    await websocket.send_json({
-                        "type": "portfolio_update",
-                        "data": ledger,
-                    })
-                except Exception:
-                    pass
+                    portfolio_summary = await asyncio.to_thread(
+                        build_full_portfolio_summary, user_id
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "portfolio_update",
+                            "data": portfolio_summary,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning("Failed to push portfolio_update after HITL: %s", e)
 
                 active_thread_id = None
                 continue
@@ -222,9 +213,10 @@ async def websocket_endpoint(
                 "user_id": user_id,
                 "username": username,
                 "messages": [HumanMessage(content=clean_directive)],
-                "paper_trading_enabled": True,  # §4.4: always default paper; live flag is server-controlled
+                "paper_trading_enabled": True,
                 "quant_data": {},
                 "sentiment_data": {},
+                "node_latencies_ms": {},
                 "current_ticker": None,
                 "asset_class": "equity",
                 "requested_action": None,
@@ -237,6 +229,9 @@ async def websocket_endpoint(
                 "human_approved": False,
                 "errors": [],
             }
+
+            pipeline_start_ns = time.perf_counter_ns()
+            emitted_asset_ticker = None
 
             # ── Stream through agent pipeline ───────────────────
             async for event in trading_swarm.astream(
@@ -266,7 +261,6 @@ async def websocket_endpoint(
                                     }
                                 )
 
-                        # Fetch and send asset/sentiment data
                         full_snapshot = await trading_swarm.aget_state(config)
                         snapshot_values = full_snapshot.values or {}
 
@@ -285,7 +279,13 @@ async def websocket_endpoint(
                             )
                         )
 
-                        if extracted_ticker and extracted_ticker != "UNKNOWN":
+                        # Fetch asset_intelligence only ONCE per directive instead of on every node (BUG-013)
+                        if (
+                            extracted_ticker
+                            and extracted_ticker != "UNKNOWN"
+                            and extracted_ticker != emitted_asset_ticker
+                        ):
+                            emitted_asset_ticker = extracted_ticker
                             live_data = await asyncio.to_thread(
                                 get_live_asset_data, extracted_ticker
                             )
@@ -297,7 +297,6 @@ async def websocket_endpoint(
                                     }
                                 )
 
-                        # Construct unified consensus payload
                         raw_sent = node_state.get(
                             "sentiment_data"
                         ) or snapshot_values.get("sentiment_data", {})
@@ -318,7 +317,6 @@ async def websocket_endpoint(
                             else:
                                 payload_sent = dict(raw_sent)
 
-                        # Extract reasoning from orchestrator's proposed_trade
                         current_proposed = (
                             node_state.get("proposed_trade")
                             or snapshot_values.get("proposed_trade")
@@ -331,7 +329,6 @@ async def websocket_endpoint(
                                 "reasoning"
                             )
 
-                        # Dispatch sentiment/reasoning if available
                         if payload_sent and (
                             "sentiment_label" in payload_sent
                             or "top_headlines" in payload_sent
@@ -344,7 +341,6 @@ async def websocket_endpoint(
                                 }
                             )
 
-                        # Send terminal message
                         messages = node_state.get("messages", [])
                         if messages:
                             content = getattr(
@@ -363,6 +359,10 @@ async def websocket_endpoint(
                                     "content": content,
                                 }
                             )
+
+            # Record end-to-end analysis latency (Paper Eq. 6 & 7, BUG-007)
+            total_pipeline_ms = (time.perf_counter_ns() - pipeline_start_ns) / 1_000_000.0
+            telemetry.record_pipeline_run(total_pipeline_ms)
 
             # ── Post-pipeline: checkpoint or complete ───────────
             current_state = await trading_swarm.aget_state(config)
@@ -414,26 +414,28 @@ async def websocket_endpoint(
                     {
                         "type": "pipeline_complete",
                         "role": "SYSTEM",
-                        "content": "✅ Swarm pipeline execution cycle finished.",
+                        "content": f"✅ Swarm pipeline execution cycle finished in {total_pipeline_ms:.0f}ms.",
                     }
                 )
 
-                # Push updated portfolio to frontend
                 try:
-                    ledger = get_user_ledger(user_id)
-                    await websocket.send_json({
-                        "type": "portfolio_update",
-                        "data": ledger,
-                    })
-                except Exception:
-                    pass
+                    portfolio_summary = await asyncio.to_thread(
+                        build_full_portfolio_summary, user_id
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "portfolio_update",
+                            "data": portfolio_summary,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning("Failed to push portfolio_update after completion: %s", e)
 
                 active_thread_id = None
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except RuntimeError as e:
-        # §4.6 — RuntimeError from the pipeline must NOT be swallowed as a disconnect
         logger.exception("Runtime error in WebSocket pipeline: %s", e)
     except Exception as e:
-        logger.exception("Unhandled error in WebSocket loop")
+        logger.exception("Unhandled error in WebSocket loop: %s", e)

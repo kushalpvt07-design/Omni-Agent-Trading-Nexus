@@ -1,13 +1,10 @@
 """
-src.api.routes.health — Infrastructure health probe.
-
-This endpoint is intentionally unauthenticated so that load balancers,
-Kubernetes liveness probes, and monitoring tools can reach it.
+src.api.routes.health — Infrastructure health probe and telemetry metrics endpoint.
 """
 
 from fastapi import APIRouter
-
 from src.core.config import settings
+from src.core.telemetry import telemetry
 
 router = APIRouter(tags=["Infrastructure"])
 
@@ -22,3 +19,9 @@ async def health_check():
         "version": settings.APP_VERSION,
         "checkpointer": "ready" if get_checkpointer() else "initializing",
     }
+
+
+@router.get("/api/v1/metrics")
+async def get_metrics():
+    """Return real-time swarm latency (T_avg) and execution success rate (E_s) telemetry."""
+    return telemetry.get_snapshot()
