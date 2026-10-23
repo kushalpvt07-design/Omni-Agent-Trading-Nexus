@@ -2,15 +2,12 @@
 src.core.market_data — Live market data via Alpaca + yfinance.
 
 Routing logic:
-  - Indian stocks (.NS / .BO suffix) → yfinance
+  - Indian stocks (.NS / .BO suffix) → yfinance (with INR-to-USD FX helper for ledger math)
   - US stocks & crypto                → Alpaca Data API (latest trade)
-
-The ticker stored in the database is already the resolved symbol from the
-parser agent (e.g. "Boeing" → "BA", "Reliance" → "RELIANCE.NS"), so we
-use it directly without any further conversion.
 """
 
 import math
+import time
 import logging
 from typing import Dict, Optional
 
@@ -21,14 +18,48 @@ from src.core.config import settings
 
 logger = logging.getLogger("omni-nexus.market-data")
 
-# Module-level Alpaca client (initialized lazily)
 _client: Optional[StockHistoricalDataClient] = None
+_fx_cache: Dict[str, float] = {"rate": 84.0, "timestamp": 0.0}
+_FX_TTL_SECONDS = 3600.0
 
 
 def _is_indian_stock(ticker: str) -> bool:
     """Check if a ticker is an Indian market stock (NSE/BSE)."""
-    upper = ticker.upper()
+    upper = ticker.upper().strip()
     return upper.endswith(".NS") or upper.endswith(".BO")
+
+
+def get_usd_inr_rate() -> float:
+    """Return the USD/INR exchange rate (how many INR per 1 USD), cached for 1 hour."""
+    now = time.time()
+    if now - _fx_cache["timestamp"] < _FX_TTL_SECONDS and _fx_cache["rate"] > 0:
+        return _fx_cache["rate"]
+
+    try:
+        import yfinance as yf
+
+        fx = yf.Ticker("USDINR=X")
+        hist = fx.history(period="1d")
+        if not hist.empty:
+            rate = float(hist["Close"].iloc[-1])
+            if not math.isnan(rate) and rate > 10.0:
+                _fx_cache["rate"] = rate
+                _fx_cache["timestamp"] = now
+                return rate
+    except Exception as e:
+        logger.warning("USDINR FX fetch failed, using cached fallback %.2f: %s", _fx_cache["rate"], e)
+
+    return _fx_cache["rate"]
+
+
+def to_usd_price(price: float, ticker: str) -> float:
+    """Convert a native ticker price into USD for consistent portfolio & risk accounting."""
+    if price <= 0:
+        return 0.0
+    if _is_indian_stock(ticker):
+        rate = get_usd_inr_rate()
+        return price / rate if rate > 0 else price / 84.0
+    return price
 
 
 def _get_alpaca_client() -> Optional[StockHistoricalDataClient]:
@@ -50,7 +81,7 @@ def _get_alpaca_client() -> Optional[StockHistoricalDataClient]:
 
 
 def _fetch_alpaca_prices(tickers: list[str]) -> Dict[str, float]:
-    """Fetch latest trade prices from Alpaca for US stocks/crypto."""
+    """Fetch latest trade prices from Alpaca for US stocks."""
     if not tickers:
         return {}
 
@@ -72,15 +103,15 @@ def _fetch_alpaca_prices(tickers: list[str]) -> Dict[str, float]:
 
 
 def _fetch_yfinance_price(ticker: str) -> Optional[float]:
-    """Fetch the latest price from yfinance for Indian market stocks."""
+    """Fetch the latest price from yfinance for Indian market stocks (in native INR)."""
     try:
         import yfinance as yf
 
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1d")
+        hist = stock.history(period="5d")
         if hist.empty:
             return None
-        close = float(hist["Close"].iloc[-1])
+        close = float(hist["Close"].dropna().iloc[-1])
         if math.isnan(close):
             return None
         return close
@@ -89,21 +120,13 @@ def _fetch_yfinance_price(ticker: str) -> Optional[float]:
         return None
 
 
-
-# ── Public API ──────────────────────────────────────────────────
-
-
 def _is_crypto(ticker: str) -> bool:
     """Crypto tickers use Alpaca's slash format, e.g. BTC/USD."""
     return "/" in ticker
 
 
 def _fetch_crypto_prices(tickers: list[str]) -> Dict[str, float]:
-    """Fetch latest trade prices from Alpaca for crypto assets.
-
-    §5.1 — Crypto symbols are invalid in StockLatestTradeRequest; they must
-    go through CryptoHistoricalDataClient / CryptoLatestTradeRequest.
-    """
+    """Fetch latest trade prices from Alpaca for crypto assets."""
     if not tickers:
         return {}
 
@@ -127,11 +150,7 @@ def _fetch_crypto_prices(tickers: list[str]) -> Dict[str, float]:
 
 
 def get_latest_price(ticker: str) -> Optional[float]:
-    """Get the latest price for a single ticker.
-
-    Routes to yfinance for Indian stocks, Alpaca crypto client for crypto,
-    and Alpaca stock client for everything else.
-    """
+    """Get the latest native price for a single ticker."""
     if _is_indian_stock(ticker):
         return _fetch_yfinance_price(ticker)
 
@@ -143,41 +162,32 @@ def get_latest_price(ticker: str) -> Optional[float]:
     return prices.get(ticker)
 
 
-def get_latest_prices(tickers: list[str]) -> Dict[str, float]:
+def get_latest_prices(tickers: list[str], convert_indian_to_usd: bool = False) -> Dict[str, float]:
     """Get the latest prices for multiple tickers in as few API calls as possible.
 
-    Indian stocks (.NS/.BO) are fetched individually via yfinance.
-    Crypto tickers (containing /) are batched into a CryptoLatestTradeRequest.
-    All other tickers are batched into a single StockLatestTradeRequest.
-    Returns a dict of {ticker: price}. Missing tickers are omitted.
-
-    §5.1 — Previously crypto symbols in a stock batch caused the entire
-    response to fail, silently zeroing all US stock prices.
+    If convert_indian_to_usd is True, Indian (.NS/.BO) prices are converted from INR to USD
+    so portfolio equity and risk calculations are dimensionally consistent.
     """
     if not tickers:
         return {}
 
     prices: Dict[str, float] = {}
 
-    # Partition tickers by routing destination
     indian_tickers = [t for t in tickers if _is_indian_stock(t)]
     crypto_tickers = [t for t in tickers if not _is_indian_stock(t) and _is_crypto(t)]
-    stock_tickers  = [t for t in tickers if not _is_indian_stock(t) and not _is_crypto(t)]
+    stock_tickers = [t for t in tickers if not _is_indian_stock(t) and not _is_crypto(t)]
 
-    # Batch fetch US stocks from Alpaca
     if stock_tickers:
         alpaca_prices = _fetch_alpaca_prices(stock_tickers)
         prices.update(alpaca_prices)
 
-    # Batch fetch crypto from Alpaca (separate client)
     if crypto_tickers:
         crypto_prices = _fetch_crypto_prices(crypto_tickers)
         prices.update(crypto_prices)
 
-    # Fetch Indian stocks individually from yfinance
     for ticker in indian_tickers:
         price = _fetch_yfinance_price(ticker)
         if price is not None:
-            prices[ticker] = price
+            prices[ticker] = to_usd_price(price, ticker) if convert_indian_to_usd else price
 
     return prices

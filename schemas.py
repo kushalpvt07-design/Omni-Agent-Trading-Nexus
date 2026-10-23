@@ -36,7 +36,10 @@ class TradeDirectiveSchema(BaseModel):
         default=None,
         description="Portfolio allocation fraction (0.0 to 1.0).",
     )
-    risk_threshold: Optional[float] = Field(default=0.5)
+    risk_threshold: Optional[float] = Field(
+        default=0.5,
+        description="Maximum acceptable annualized volatility fraction (0.0 to 1.0).",
+    )
 
     @field_validator("quantity")
     @classmethod
@@ -52,10 +55,19 @@ class TradeDirectiveSchema(BaseModel):
         """§1.6 — LLMs sometimes return 50 for '50%'. Clamp to [0, 1]."""
         if value is None:
             return value
-        # If the LLM returned a percentage (e.g. 25 meaning 25%), convert it
         if value > 1.0:
             value = value / 100.0
         return max(0.0, min(1.0, value))
+
+    @field_validator("risk_threshold")
+    @classmethod
+    def normalize_risk_threshold(cls, value: Optional[float]) -> Optional[float]:
+        """Normalize percentage risk thresholds (e.g. 20 for '20%') to [0.01, 1.0]."""
+        if value is None:
+            return 0.5
+        if value > 1.0:
+            value = value / 100.0
+        return max(0.01, min(1.0, float(value)))
 
     @field_validator("ticker")
     @classmethod

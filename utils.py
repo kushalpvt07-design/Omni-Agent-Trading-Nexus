@@ -1,71 +1,68 @@
-import yfinance as yf
 import math
 import logging
+import numpy as np
+import yfinance as yf
 
 logger = logging.getLogger("omni-nexus.utils")
 
 
 def _build_chart_data(hist, time_format="%d/%m"):
-    """Convert a DataFrame of historical prices into chart-ready JSON data.
-
-    Includes OHLC (open, high, low, close) fields for candlestick rendering
-    alongside the legacy ``price`` key for backward compatibility.
-    """
+    """Convert a DataFrame of historical prices into chart-ready JSON data."""
     chart_data = []
     for date, row in hist.iterrows():
         close_val = float(row["Close"])
         if math.isnan(close_val):
             continue
-        open_val = float(row["Open"]) if "Open" in row and not math.isnan(float(row["Open"])) else close_val
-        high_val = float(row["High"]) if "High" in row and not math.isnan(float(row["High"])) else close_val
-        low_val = float(row["Low"]) if "Low" in row and not math.isnan(float(row["Low"])) else close_val
+        open_val = (
+            float(row["Open"])
+            if "Open" in row and not math.isnan(float(row["Open"]))
+            else close_val
+        )
+        high_val = (
+            float(row["High"])
+            if "High" in row and not math.isnan(float(row["High"]))
+            else close_val
+        )
+        low_val = (
+            float(row["Low"])
+            if "Low" in row and not math.isnan(float(row["Low"]))
+            else close_val
+        )
         chart_data.append(
             {
                 "time": date.strftime(time_format),
-                "price": round(close_val, 2) if not math.isnan(close_val) else 0.0,
+                "price": round(close_val, 2),
                 "open": round(open_val, 2),
                 "high": round(high_val, 2),
                 "low": round(low_val, 2),
-                "close": round(close_val, 2) if not math.isnan(close_val) else 0.0,
+                "close": round(close_val, 2),
             }
         )
     return chart_data
 
 
 def get_live_asset_data(ticker_symbol: str):
-    """Fetches live price, change %, volatility, and chart data for a ticker.
-
-    Returns chart data for multiple timeframes (1D, 5D, 15D, 1M, ALL) so the
-    frontend can switch between them without an extra API round-trip.
-
-    This is a synchronous function — callers in async contexts should wrap it
-    with ``asyncio.to_thread()`` to avoid blocking the event loop.
-    """
+    """Fetches live price, change %, 30-trading-day log-return volatility, and chart data."""
     if not ticker_symbol or ticker_symbol == "UNKNOWN":
         return None
 
     ticker_upper = ticker_symbol.upper().strip()
-
-    # Preserve Indian market exchange suffixes (.NS for NSE, .BO for BSE)
     is_indian_market = ticker_upper.endswith(".NS") or ticker_upper.endswith(".BO")
 
     if is_indian_market:
-        clean_ticker = ticker_upper  # Keep as-is for Yahoo Finance
+        clean_ticker = ticker_upper
     else:
         clean_ticker = ticker_upper.replace("/", "-")
 
-    # Determine currency based on market
     currency = "INR" if is_indian_market else "USD"
 
     try:
         ticker = yf.Ticker(clean_ticker)
-        hist = ticker.history(period="1mo")
+        # Fetch 60 calendar days so 30 trading days are available for volatility (BUG-011)
+        hist_60 = ticker.history(period="60d")
 
-        # Smart fallback for crypto: if empty, try adding the -USD suffix.
-        # §5.5 — Only do this for tickers that look like crypto (no dots, short,
-        # all alpha). An invalid stock ticker XYZ must NOT silently become XYZ-USD.
         if (
-            hist.empty
+            hist_60.empty
             and not is_indian_market
             and "-" not in clean_ticker
             and "." not in clean_ticker
@@ -74,20 +71,21 @@ def get_live_asset_data(ticker_symbol: str):
         ):
             crypto_ticker = f"{clean_ticker}-USD"
             ticker = yf.Ticker(crypto_ticker)
-            hist = ticker.history(period="1mo")
+            hist_60 = ticker.history(period="60d")
             clean_ticker = crypto_ticker
 
-        if hist.empty:
+        if hist_60.empty:
             return None
 
-        hist = hist.dropna(subset=["Close"])
-        if hist.empty:
+        hist_60 = hist_60.dropna(subset=["Close"])
+        if hist_60.empty:
             return None
 
+        # Use last ~22 trading bars (~1 month) for 1M chart display
+        hist = hist_60.tail(22)
         current_price = float(hist["Close"].iloc[-1])
         prev_price = float(hist["Close"].iloc[0])
 
-        # JSON serialization safety — prevent ZeroDivisionError and NaN payloads
         if math.isnan(current_price) or math.isnan(prev_price) or prev_price == 0:
             return None
 
@@ -95,46 +93,43 @@ def get_live_asset_data(ticker_symbol: str):
         if math.isnan(change_pct):
             change_pct = 0.0
 
-        returns = hist["Close"].pct_change().dropna()
-        # §5.5 — crypto trades 24/7/365; use √365 for annualization, not √252
-        annualization_days = 365 if is_indian_market is False and "-" in clean_ticker else 252
+        # Standardized 30-trading-day log-return annualized volatility matching quant_server.py (BUG-011)
+        closes_30 = hist_60["Close"].tail(30)
+        log_returns = np.log(closes_30 / closes_30.shift(1)).dropna()
+        annualization_days = 365 if (not is_indian_market and "-" in clean_ticker) else 252
         volatility = (
-            float(returns.std() * (annualization_days**0.5) * 100) if not returns.empty else 0.0
+            float(log_returns.std(ddof=1) * math.sqrt(annualization_days) * 100.0)
+            if len(log_returns) >= 2
+            else 0.0
         )
 
         if math.isnan(volatility):
             volatility = 0.0
 
-        # Build chart data for the default 1M period
         chart_data = _build_chart_data(hist)
-
-        # Build chart data for all supported timeframes
         timeframe_data = {
-            "1M": chart_data,  # Already have this from the main query
+            "1M": chart_data,
         }
 
-        # 1D: Fetch intraday hourly data for detailed 1-day view
         try:
             hist_1d = ticker.history(period="1d", interval="1h")
             if not hist_1d.empty:
                 timeframe_data["1D"] = _build_chart_data(hist_1d, time_format="%H:%M")
             else:
-                # Fallback: use last day from daily data
                 timeframe_data["1D"] = _build_chart_data(hist.iloc[-1:])
         except Exception:
             timeframe_data["1D"] = _build_chart_data(hist.iloc[-1:])
 
-        # 5D and 15D: Slice from existing monthly data
         if len(hist) >= 5:
             timeframe_data["5D"] = _build_chart_data(hist.iloc[-5:])
         else:
             timeframe_data["5D"] = chart_data
+
         if len(hist) >= 15:
             timeframe_data["15D"] = _build_chart_data(hist.iloc[-15:])
         else:
             timeframe_data["15D"] = chart_data
 
-        # ALL: Fetch extended 1-year history
         try:
             hist_all = ticker.history(period="1y")
             if not hist_all.empty:

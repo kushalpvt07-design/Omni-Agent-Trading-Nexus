@@ -10,7 +10,7 @@ def merge_dicts(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
 
 class TradeProposal(TypedDict, total=False):
     """Exact structure of a trade proposal so the execution node doesn't guess."""
-    action: str          # BUY, SELL, HOLD
+    action: str          # BUY, SELL, HOLD, REJECT
     ticker: str
     shares: Optional[float]
     allocation: Optional[float]
@@ -18,7 +18,7 @@ class TradeProposal(TypedDict, total=False):
     reasoning: str
 
 
-class FinancialSwarmState(TypedDict):
+class FinancialSwarmState(TypedDict, total=False):
     """Central state schema for the LangGraph trading swarm."""
 
     # User Identity (set by WebSocket handler from JWT)
@@ -29,9 +29,10 @@ class FinancialSwarmState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     errors: Annotated[List[str], operator.add]
 
-    # Swarm Data Context
+    # Swarm Data Context (merge_dicts supports parallel fan-out writes)
     quant_data: Annotated[Dict[str, Any], merge_dicts]
     sentiment_data: Annotated[Dict[str, Any], merge_dicts]
+    node_latencies_ms: Annotated[Dict[str, float], merge_dicts]
 
     # Extracted Entities
     current_ticker: Optional[str]
