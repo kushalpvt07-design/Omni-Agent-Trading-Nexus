@@ -1,5 +1,6 @@
 import sys
 import json
+import asyncio
 import logging
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -10,25 +11,20 @@ from tenacity import (
     retry_if_not_exception_type,
 )
 from src.state import FinancialSwarmState
+from src.core.telemetry import Timer, telemetry
 
 logger = logging.getLogger("omni-nexus.quant")
 
-# Error codes that should NOT be retried (permanent / deterministic failures)
 _NON_RETRYABLE_ERRORS = {"AUTH_ERROR", "INVALID_TICKER", "DATA_CORRUPT", "NO_DATA"}
+MCP_TIMEOUT_SECONDS = 15.0
 
 
 class AlpacaAuthError(Exception):
-    """Raised when Alpaca returns a 401/403 — retrying won't help."""
+    """Raised when Alpaca returns a 401/403 or deterministic data failure — retrying won't help."""
     pass
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    reraise=True,
-    retry=retry_if_not_exception_type(AlpacaAuthError),
-)
-async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
+async def _fetch_mcp_quant_inner(ticker: str, asset_class: str) -> str:
     server_params = StdioServerParameters(
         command=sys.executable, args=["-m", "src.servers.quant_server"]
     )
@@ -49,8 +45,6 @@ async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
             else:
                 raw_text = str(result.content)
 
-            # Parse structured errors from the quant server and raise typed
-            # exceptions so the retry decorator can decide whether to retry.
             try:
                 parsed = json.loads(raw_text)
                 if isinstance(parsed, dict) and parsed.get("status") == "error":
@@ -58,17 +52,27 @@ async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
                     error_msg = parsed.get("message", "Unknown quant server error.")
 
                     if error_code in _NON_RETRYABLE_ERRORS:
-                        raise AlpacaAuthError(
-                            f"[{error_code}] {error_msg}"
-                        )
-                    # Retryable server errors — raise so tenacity can retry
+                        raise AlpacaAuthError(f"[{error_code}] {error_msg}")
                     raise RuntimeError(f"[{error_code}] {error_msg}")
             except AlpacaAuthError:
-                raise  # Propagate non-retryable errors immediately
+                raise
             except (json.JSONDecodeError, TypeError):
-                pass  # Not JSON — return as-is
+                pass
 
             return raw_text
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=6),
+    reraise=True,
+    retry=retry_if_not_exception_type(AlpacaAuthError),
+)
+async def fetch_mcp_quant_data(ticker: str, asset_class: str) -> str:
+    return await asyncio.wait_for(
+        _fetch_mcp_quant_inner(ticker, asset_class),
+        timeout=MCP_TIMEOUT_SECONDS,
+    )
 
 
 async def quant_agent_node(state: FinancialSwarmState) -> dict:
@@ -79,30 +83,36 @@ async def quant_agent_node(state: FinancialSwarmState) -> dict:
     asset_class = state.get("asset_class", "equity")
 
     if ticker == "UNKNOWN" or not ticker:
+        telemetry.record_error("QUANT_INVALID_TICKER")
         return {
             "errors": [
                 "Quant Agent: Could not resolve a valid ticker symbol from the state."
             ]
         }
 
-    try:
-        text_content = await fetch_mcp_quant_data(ticker, asset_class)
+    with Timer("quant_agent_node") as timer:
+        try:
+            text_content = await fetch_mcp_quant_data(ticker, asset_class)
 
-        # Prevent passing empty/None strings to Risk Desk
-        if not text_content or text_content.strip() == "":
-            text_content = "{}"
+            if not text_content or text_content.strip() == "":
+                text_content = "{}"
 
-        return {"quant_data": {ticker: text_content}}
+            return {
+                "quant_data": {ticker: text_content},
+                "node_latencies_ms": {"quant_agent_node": timer.elapsed_ms},
+            }
 
-    except AlpacaAuthError as e:
-        logger.error("Alpaca auth failure for %s — not retrying: %s", ticker, e)
-        return {
-            "errors": [
-                f"Quant Agent [{ticker}]: {str(e)} — "
-                "Please regenerate your Alpaca API keys and update the .env file."
-            ]
-        }
-    except Exception as e:
-        logger.exception("Quant agent error for %s", ticker)
-        return {"errors": [f"Quant Server Error [{ticker}]: {str(e)}"]}
-
+        except AlpacaAuthError as e:
+            telemetry.record_error("QUANT_NON_RETRYABLE_ERROR")
+            logger.error("Quant deterministic/auth failure for %s: %s", ticker, e)
+            return {
+                "errors": [f"Quant Agent [{ticker}]: {str(e)}"],
+                "node_latencies_ms": {"quant_agent_node": timer.elapsed_ms},
+            }
+        except Exception as e:
+            telemetry.record_error("QUANT_SERVER_ERROR")
+            logger.exception("Quant agent error for %s", ticker)
+            return {
+                "errors": [f"Quant Server Error [{ticker}]: {str(e)}"],
+                "node_latencies_ms": {"quant_agent_node": timer.elapsed_ms},
+            }

@@ -8,10 +8,17 @@ from src.agents.risk_agent import risk_agent_node
 from src.agents.execution_agent import execution_agent_node
 
 
+def route_after_parser(state: FinancialSwarmState):
+    """Fan out to both Sentiment and Quant agents in parallel if parsing succeeded;
+    route directly to orchestrator_node (which formats the rejection message) if errors occurred."""
+    if state.get("errors") or not state.get("current_ticker") or state.get("current_ticker") == "UNKNOWN":
+        return ["orchestrator_node"]
+    return ["sentiment_agent_node", "quant_agent_node"]
+
+
 def route_after_orchestrator(state: FinancialSwarmState):
     proposed_trade = state.get("proposed_trade")
 
-    # Safely extract action whether it's a model, dataclass, or dict
     if hasattr(proposed_trade, "action"):
         action = str(proposed_trade.action).upper()
     elif isinstance(proposed_trade, dict):
@@ -19,7 +26,6 @@ def route_after_orchestrator(state: FinancialSwarmState):
     else:
         action = "HOLD"
 
-    # Only halt if explicitly rejected
     if action == "REJECT":
         return END
 
@@ -27,7 +33,7 @@ def route_after_orchestrator(state: FinancialSwarmState):
 
 
 def route_after_risk(state: FinancialSwarmState):
-    """§4.1 — Only send to the HITL execution checkpoint when risk approved
+    """Only send to the HITL execution checkpoint when risk approved
     a real BUY or SELL order. HOLDs and risk-rejected overrides skip straight
     to END so they never show the human-approval modal.
     """
@@ -48,8 +54,7 @@ def route_after_risk(state: FinancialSwarmState):
 
 
 def build_graph():
-    """Constructs the LangGraph state machine. Returns an uncompiled builder
-    so that callers (main.py) can attach checkpointers and interrupt points."""
+    """Constructs the LangGraph state machine with parallel Quant + Sentiment fan-out/fan-in."""
     builder = StateGraph(FinancialSwarmState)
 
     builder.add_node("parser_node", parser_node)
@@ -61,9 +66,15 @@ def build_graph():
 
     builder.set_entry_point("parser_node")
 
-    builder.add_edge("parser_node", "sentiment_agent_node")
-    builder.add_edge("sentiment_agent_node", "quant_agent_node")
-    builder.add_edge("quant_agent_node", "orchestrator_node")
+    # Parallel fan-out from parser_node to sentiment_agent_node and quant_agent_node
+    builder.add_conditional_edges(
+        "parser_node",
+        route_after_parser,
+        ["sentiment_agent_node", "quant_agent_node", "orchestrator_node"],
+    )
+
+    # Fan-in synchronization barrier: wait for both parallel branches before orchestrator_node
+    builder.add_edge(["sentiment_agent_node", "quant_agent_node"], "orchestrator_node")
 
     builder.add_conditional_edges(
         "orchestrator_node",
@@ -71,7 +82,6 @@ def build_graph():
         {"risk_agent_node": "risk_agent_node", END: END},
     )
 
-    # §4.1 — Conditional edge: only approved BUY/SELL trades reach execution/HITL
     builder.add_conditional_edges(
         "risk_agent_node",
         route_after_risk,
