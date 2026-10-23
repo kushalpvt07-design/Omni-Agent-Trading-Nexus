@@ -1,240 +1,189 @@
+"use client";
+
 import { useState, useEffect, useRef, useCallback } from "react";
-import type {
-  AssetData,
-  SentimentData,
-  CheckpointData,
-  PortfolioData,
-  LogMessage,
-  SwarmState,
-} from "@/types/swarm";
+import { PortfolioData, CheckpointDetails } from "@/types/swarm";
 
-// Re-export for backward compatibility with existing component imports
-export type { LogMessage } from "@/types/swarm";
+export interface LogMessage {
+  type: "user" | "status" | "message" | "checkpoint";
+  role?: string;
+  content: string;
+  timestamp: string;
+}
 
-const RECONNECT_INTERVAL_MS = 2000;
-const MAX_RECONNECT_DELAY_MS = 30000;
-const PORTFOLIO_REFRESH_INTERVAL_MS = 30000; // Refresh portfolio every 30s
+export interface SwarmUIState {
+  isConnected: boolean;
+  isDeploying: boolean;
+  directiveLogs: LogMessage[];
+  assetData: any | null;
+  sentimentData: any | null;
+  portfolioData: PortfolioData | null;
+  pendingCheckpoint: CheckpointDetails | null;
+}
 
-export function useSwarmWebSocket(url: string, token?: string) {
-  const [state, setState] = useState<SwarmState>({
+export function useSwarmWebSocket(wsBaseUrl: string, token?: string) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [state, setState] = useState<SwarmUIState>({
     isConnected: false,
     isDeploying: false,
     directiveLogs: [],
     assetData: null,
     sentimentData: null,
-    pendingCheckpoint: null,
     portfolioData: null,
+    pendingCheckpoint: null,
   });
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectAttemptRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const intentionalCloseRef = useRef(false);
-  const portfolioIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Centralized portfolio fetch — reused by initial load, WS events, and polling
-  const refreshPortfolio = useCallback(() => {
-    // Don't fetch if we don't have a token yet
-    if (!token) return;
-
-    fetch("http://localhost:8000/api/v1/portfolio", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data: PortfolioData) => {
+  const fetchInitialPortfolio = useCallback(async (jwtToken: string) => {
+    try {
+      const res = await fetch("http://localhost:8000/api/v1/portfolio", {
+        headers: { Authorization: `Bearer ${jwtToken}` },
+      });
+      if (res.ok) {
+        const data: PortfolioData = await res.json();
         setState((prev) => ({ ...prev, portfolioData: data }));
-      })
-      .catch(() => {});
-  }, [token]);
-
-  const connect = useCallback(() => {
-    // Do not attempt to connect until we have a valid auth token.
-    // The parent page sets the token asynchronously from localStorage;
-    // this guard prevents a 403-storm while the token is still null.
-    if (!token) {
-      return;
-    }
-
-    // Prevent duplicate connections
-    if (
-      wsRef.current &&
-      (wsRef.current.readyState === WebSocket.OPEN ||
-        wsRef.current.readyState === WebSocket.CONNECTING)
-    ) {
-      return;
-    }
-
-    // Append auth token as query parameter
-    const authUrl = `${url}?token=${encodeURIComponent(token)}`;
-    const ws = new WebSocket(authUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      reconnectAttemptRef.current = 0;
-      setState((prev) => ({ ...prev, isConnected: true }));
-
-      // Fetch initial portfolio data via REST
-      refreshPortfolio();
-
-      // Start periodic portfolio refresh to keep live prices current
-      if (portfolioIntervalRef.current) {
-        clearInterval(portfolioIntervalRef.current);
       }
-      portfolioIntervalRef.current = setInterval(
-        refreshPortfolio,
-        PORTFOLIO_REFRESH_INTERVAL_MS
-      );
-    };
-
-    ws.onclose = (event: CloseEvent) => {
-      setState((prev) => ({
-        ...prev,
-        isConnected: false,
-        isDeploying: false,
-      }));
-
-      // Stop portfolio polling when disconnected
-      if (portfolioIntervalRef.current) {
-        clearInterval(portfolioIntervalRef.current);
-        portfolioIntervalRef.current = null;
-      }
-
-      // Do NOT reconnect on auth rejection (4003) — the token is invalid.
-      // Only reconnect on unexpected disconnects (network drops, server restarts).
-      const isAuthRejection = event.code === 4003;
-      if (!intentionalCloseRef.current && !isAuthRejection) {
-        const delay = Math.min(
-          RECONNECT_INTERVAL_MS * Math.pow(2, reconnectAttemptRef.current),
-          MAX_RECONNECT_DELAY_MS
-        );
-        reconnectAttemptRef.current += 1;
-        reconnectTimerRef.current = setTimeout(connect, delay);
-      }
-    };
-
-    ws.onerror = () => {
-      // Let onclose handle reconnection — just close the broken socket
-      ws.close();
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-
-        if (payload.type === "asset_intelligence") {
-          setState((prev) => ({
-            ...prev,
-            assetData: payload.data as AssetData,
-          }));
-        }
-
-        if (payload.type === "sentiment_data") {
-          setState((prev) => ({
-            ...prev,
-            sentimentData: {
-              ...prev.sentimentData,
-              ...payload.data,
-            } as SentimentData,
-          }));
-        }
-
-        // Standard terminal logs
-        if (payload.type === "message" || payload.type === "status") {
-          setState((prev) => ({
-            ...prev,
-            directiveLogs: [...prev.directiveLogs, payload as LogMessage],
-          }));
-
-          if (
-            payload.content &&
-            payload.content.includes("Transaction cycle closed.")
-          ) {
-            setState((prev) => ({ ...prev, isDeploying: false }));
-          }
-        }
-
-        // Pipeline completed without checkpoint (no HITL needed)
-        if (payload.type === "pipeline_complete") {
-          setState((prev) => ({
-            ...prev,
-            isDeploying: false,
-            directiveLogs: [...prev.directiveLogs, payload as LogMessage],
-          }));
-          // Immediately refresh portfolio after pipeline completes
-          refreshPortfolio();
-        }
-
-        if (payload.type === "checkpoint") {
-          setState((prev) => ({
-            ...prev,
-            pendingCheckpoint: payload.trade_details as CheckpointData,
-          }));
-        }
-
-        // Portfolio update after trade execution
-        if (payload.type === "portfolio_update") {
-          // Fetch full portfolio with live prices from REST
-          refreshPortfolio();
-        }
-      } catch (err) {
-        console.error("Failed to parse WebSocket message:", err);
-      }
-    };
-  }, [url, token, refreshPortfolio]);
-
-  useEffect(() => {
-    intentionalCloseRef.current = false;
-    connect();
-
-    return () => {
-      intentionalCloseRef.current = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-      }
-      if (portfolioIntervalRef.current) {
-        clearInterval(portfolioIntervalRef.current);
-        portfolioIntervalRef.current = null;
-      }
-      wsRef.current?.close();
-    };
-  }, [connect]);
-
-  const deployDirective = useCallback((directive: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const userEchoLog: LogMessage = {
-        type: "message",
-        role: "user",
-        content: `> ${directive}`,
-        timestamp: new Date().toISOString(),
-      };
-
-      setState((prev) => ({
-        ...prev,
-        isDeploying: true,
-        directiveLogs: [userEchoLog],
-        assetData: null,
-        sentimentData: null,
-        pendingCheckpoint: null,
-      }));
-
-      wsRef.current.send(JSON.stringify({ directive, paper_trading: true }));
-    } else {
-      console.error("WebSocket is not connected.");
+    } catch {
+      // Ignore transient initial fetch errors
     }
   }, []);
 
+  useEffect(() => {
+    if (!token) return;
+
+    fetchInitialPortfolio(token);
+
+    let isUnmounted = false;
+
+    const connect = () => {
+      if (isUnmounted) return;
+      const url = `${wsBaseUrl}?token=${encodeURIComponent(token)}`;
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (isUnmounted) return;
+        setState((prev) => ({ ...prev, isConnected: true }));
+      };
+
+      ws.onmessage = (event) => {
+        if (isUnmounted) return;
+        try {
+          const msg = JSON.parse(event.data);
+          const nowIso = new Date().toISOString();
+
+          if (msg.type === "status") {
+            setState((prev) => ({
+              ...prev,
+              directiveLogs: [
+                ...prev.directiveLogs,
+                { type: "status", role: msg.role, content: msg.content, timestamp: nowIso },
+              ],
+            }));
+          } else if (msg.type === "message") {
+            const isClosing =
+              msg.content === "Transaction cycle closed." ||
+              msg.role === "SYSTEM ERROR";
+            setState((prev) => ({
+              ...prev,
+              isDeploying: isClosing ? false : prev.isDeploying,
+              directiveLogs: [
+                ...prev.directiveLogs,
+                { type: "message", role: msg.role, content: msg.content, timestamp: nowIso },
+              ],
+            }));
+          } else if (msg.type === "asset_intelligence") {
+            setState((prev) => ({ ...prev, assetData: msg.data }));
+          } else if (msg.type === "sentiment_data") {
+            setState((prev) => ({
+              ...prev,
+              sentimentData: { ...(prev.sentimentData || {}), ...msg.data },
+            }));
+          } else if (msg.type === "checkpoint") {
+            setState((prev) => ({
+              ...prev,
+              pendingCheckpoint: msg.trade_details || null,
+              directiveLogs: [
+                ...prev.directiveLogs,
+                { type: "checkpoint", role: msg.role, content: msg.content, timestamp: nowIso },
+              ],
+            }));
+          } else if (msg.type === "pipeline_complete") {
+            setState((prev) => ({
+              ...prev,
+              isDeploying: false,
+              pendingCheckpoint: null,
+              directiveLogs: [
+                ...prev.directiveLogs,
+                { type: "status", role: msg.role, content: msg.content, timestamp: nowIso },
+              ],
+            }));
+          } else if (msg.type === "portfolio_update" && msg.data) {
+            // Normalize shape in case positions is ever an object
+            const raw = msg.data;
+            if (Array.isArray(raw.positions)) {
+              setState((prev) => ({ ...prev, portfolioData: raw as PortfolioData }));
+            } else {
+              fetchInitialPortfolio(token);
+            }
+          }
+        } catch {
+          // Ignore malformed WS frames
+        }
+      };
+
+      ws.onclose = (ev) => {
+        if (isUnmounted) return;
+        setState((prev) => ({ ...prev, isConnected: false, isDeploying: false }));
+        // Do not reconnect on explicit 4003 authentication rejection
+        if (ev.code !== 4003) {
+          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      isUnmounted = true;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      wsRef.current?.close();
+    };
+  }, [wsBaseUrl, token, fetchInitialPortfolio]);
+
+  const deployDirective = useCallback((directive: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    setState((prev) => ({
+      ...prev,
+      isDeploying: true,
+      pendingCheckpoint: null,
+      directiveLogs: [
+        ...prev.directiveLogs,
+        {
+          type: "user",
+          role: "USER",
+          content: directive,
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    }));
+    wsRef.current.send(JSON.stringify({ directive }));
+  }, []);
+
   const resolveCheckpoint = useCallback((approved: boolean) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: "human_approval", approved })
-      );
-      setState((prev) => ({ ...prev, pendingCheckpoint: null }));
-    }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    setState((prev) => ({
+      ...prev,
+      pendingCheckpoint: null,
+      isDeploying: false,
+    }));
+    wsRef.current.send(
+      JSON.stringify({
+        type: "human_approval",
+        approved: approved === true,
+      })
+    );
   }, []);
 
   return { state, deployDirective, resolveCheckpoint };
 }
-

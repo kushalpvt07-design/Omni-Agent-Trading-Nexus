@@ -28,14 +28,12 @@ import {
 const TIMEFRAMES = ["1D", "1M", "1Y", "ALL"] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
 
-// Format currency with compact notation for Y-axis
 function formatCompactCurrency(value: number): string {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
   if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}k`;
   return `$${value.toFixed(2)}`;
 }
 
-// Format time label based on timeframe
 function formatTimeLabel(timestamp: string, timeframe: Timeframe): string {
   const date = new Date(timestamp);
   switch (timeframe) {
@@ -65,7 +63,6 @@ function formatTimeLabel(timestamp: string, timeframe: Timeframe): string {
   }
 }
 
-// Custom tooltip for the chart
 function ChartTooltip({
   active,
   payload,
@@ -93,7 +90,7 @@ function ChartTooltip({
       </p>
       <p className="text-sm font-bold font-mono text-slate-100">
         $
-        {point.total_value.toLocaleString("en-US", {
+        {Number(point.total_value ?? 0).toLocaleString("en-US", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })}
@@ -114,11 +111,8 @@ export default function PortfolioLedger({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Fetch portfolio history for the selected timeframe
   const fetchHistory = useCallback(
     (timeframe: Timeframe) => {
-      // Wait until we have a valid token — avoids a 401 burst on initial render
-      // before the parent page's useEffect propagates the token from localStorage.
       if (!token) return;
 
       const headers: Record<string, string> = {
@@ -142,7 +136,6 @@ export default function PortfolioLedger({
     [token]
   );
 
-  // Fetch history when timeframe changes or portfolio updates
   useEffect(() => {
     fetchHistory(selectedTimeframe);
   }, [selectedTimeframe, fetchHistory, portfolioData?.total_value]);
@@ -157,19 +150,16 @@ export default function PortfolioLedger({
     setSelectedTimeframe(tf);
   };
 
-  // Determine if portfolio is up or down
   const change = historyData?.change;
   const isPositive = change ? change.change_pct >= 0 : true;
   const chartColor = isPositive ? "#2dd4bf" : "#f43f5e";
   const chartGradientId = "portfolioGradient";
 
-  // Prepare chart data with formatted labels
   const chartData = (historyData?.data_points || []).map((point) => ({
     ...point,
     label: formatTimeLabel(point.timestamp, selectedTimeframe),
   }));
 
-  // ── Empty / Loading State ───────────────────────────────────
   if (!portfolioData) {
     return (
       <div className="w-full rounded-2xl glass-card gradient-border p-5 flex flex-col group">
@@ -198,13 +188,15 @@ export default function PortfolioLedger({
     );
   }
 
-  const { cash, total_value, positions } = portfolioData;
-  const holdingsValue = total_value - cash;
+  const cash = Number(portfolioData.cash ?? 0);
+  const positions = Array.isArray(portfolioData.positions) ? portfolioData.positions : [];
+  const total_value = Number(portfolioData.total_value ?? cash);
+  const holdingsValue = Math.max(0, total_value - cash);
   const hasPositions = positions.length > 0;
 
   return (
     <div className="w-full rounded-2xl glass-card gradient-border p-5 flex flex-col group">
-      {/* ── Header ─────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center transition-all duration-300 group-hover:bg-violet-500/15">
@@ -216,7 +208,6 @@ export default function PortfolioLedger({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Timeframe Selectors */}
           <div className="flex items-center gap-0.5 bg-[#030508]/60 rounded-lg border border-slate-800/30 p-0.5">
             {TIMEFRAMES.map((tf) => (
               <button
@@ -233,7 +224,6 @@ export default function PortfolioLedger({
             ))}
           </div>
 
-          {/* Refresh Button */}
           <button
             onClick={handleRefresh}
             className="w-7 h-7 rounded-lg bg-[#030508]/60 border border-slate-800/30 flex items-center justify-center text-slate-500 hover:text-teal-400 hover:border-teal-500/20 transition-all duration-200"
@@ -246,7 +236,7 @@ export default function PortfolioLedger({
         </div>
       </div>
 
-      {/* ── Total Value + Change ────────────────────────────── */}
+      {/* Total Value + Change */}
       <div className="mb-4">
         <div className="flex items-baseline gap-3 mb-1">
           <span className="text-2xl md:text-3xl font-bold font-mono text-slate-100 tracking-tight stat-value">
@@ -288,7 +278,6 @@ export default function PortfolioLedger({
           )}
         </div>
 
-        {/* Timestamp */}
         {lastUpdated && (
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-600">
             <Clock className="w-2.5 h-2.5" />
@@ -311,15 +300,18 @@ export default function PortfolioLedger({
         )}
       </div>
 
-      {/* ── Portfolio Value Chart ───────────────────────────── */}
+      {/* Portfolio Value Chart */}
       <div className="mb-4 bg-[#020406]/40 rounded-xl border border-slate-800/20 p-2 pt-4 relative">
-        {/* Gradient left accent line */}
         <div className="absolute left-0 top-0 bottom-0 w-[2px] rounded-full bg-gradient-to-b from-violet-500/40 via-teal-500/20 to-transparent" />
 
         {chartData.length >= 1 ? (
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart
-              data={chartData.length === 1 ? [chartData[0], { ...chartData[0], label: "" }] : chartData}
+              data={
+                chartData.length === 1
+                  ? [chartData[0], { ...chartData[0], label: "" }]
+                  : chartData
+              }
               margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
             >
               <defs>
@@ -388,9 +380,8 @@ export default function PortfolioLedger({
         )}
       </div>
 
-      {/* ── Summary Row ────────────────────────────────────── */}
+      {/* Summary Row */}
       <div className="grid grid-cols-3 gap-2.5 mb-3">
-        {/* Total Value */}
         <div className="bg-[#030508]/60 rounded-xl border border-slate-800/30 p-2.5 text-center transition-all duration-300 hover:border-violet-500/15">
           <p className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-center gap-1">
             <Landmark className="w-2.5 h-2.5" />
@@ -404,7 +395,6 @@ export default function PortfolioLedger({
             })}
           </p>
         </div>
-        {/* Cash */}
         <div className="bg-[#030508]/60 rounded-xl border border-slate-800/30 p-2.5 text-center transition-all duration-300 hover:border-teal-500/15">
           <p className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-center gap-1">
             <Coins className="w-2.5 h-2.5" />
@@ -418,7 +408,6 @@ export default function PortfolioLedger({
             })}
           </p>
         </div>
-        {/* Holdings */}
         <div className="bg-[#030508]/60 rounded-xl border border-slate-800/30 p-2.5 text-center transition-all duration-300 hover:border-cyan-500/15">
           <p className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-center gap-1">
             <BarChart3 className="w-2.5 h-2.5" />
@@ -434,7 +423,7 @@ export default function PortfolioLedger({
         </div>
       </div>
 
-      {/* ── Positions Table ────────────────────────────────── */}
+      {/* Positions Table */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">
           Positions
@@ -448,7 +437,6 @@ export default function PortfolioLedger({
       </div>
 
       <div className="flex-1 min-h-[80px] max-h-[180px] bg-[#020406]/60 rounded-xl border border-slate-800/30 overflow-y-auto custom-scrollbar relative">
-        {/* Gradient left accent line */}
         <div className="absolute left-0 top-0 bottom-0 w-[2px] rounded-full bg-gradient-to-b from-violet-500/40 via-violet-500/10 to-transparent" />
 
         {!hasPositions ? (
@@ -470,7 +458,10 @@ export default function PortfolioLedger({
             </thead>
             <tbody>
               {positions.map((pos, index) => {
-                const posPositive = pos.avg_cost > 0 ? pos.current_price >= pos.avg_cost : pos.current_price > 0;
+                const posPositive =
+                  pos.avg_cost > 0
+                    ? pos.current_price >= pos.avg_cost
+                    : pos.current_price > 0;
                 return (
                   <tr
                     key={pos.ticker}
@@ -490,13 +481,13 @@ export default function PortfolioLedger({
                       </div>
                     </td>
                     <td className="py-1.5 px-3 text-right text-slate-400">
-                      {pos.shares.toLocaleString("en-US", {
+                      {Number(pos.shares ?? 0).toLocaleString("en-US", {
                         maximumFractionDigits: 4,
                       })}
                     </td>
                     <td className="py-1.5 px-3 text-right text-slate-400">
                       $
-                      {pos.current_price.toLocaleString("en-US", {
+                      {Number(pos.current_price ?? 0).toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -510,7 +501,7 @@ export default function PortfolioLedger({
                         }`}
                       >
                         $
-                        {pos.market_value.toLocaleString("en-US", {
+                        {Number(pos.market_value ?? 0).toLocaleString("en-US", {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}

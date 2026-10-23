@@ -31,11 +31,32 @@ export default function SwarmConsensus({ sentimentData }: { sentimentData: any }
   }
 
   const label = sentimentData.sentiment_label || "NEUTRAL";
-  const rawScore = sentimentData.sentiment_score || 0.5;
-  const isBullish = rawScore > 0.6;  // matches backend: label="BULLISH" when score > 0.6
+  const rawScore = sentimentData.sentiment_score ?? 0.5;
+  const isBullish = rawScore > 0.6;
+  const isBearish = rawScore < 0.4;
   const scorePercent = Math.round(rawScore * 100);
-  const rotation = Math.max(0, Math.min((rawScore * 180), 180));
-  const reasoning = sentimentData.reasoning || "No synthetic reasoning generated. Run a prompt to initiate swarm analysis.";
+  const rotation = Math.max(0, Math.min(rawScore * 180, 180));
+  const reasoning =
+    sentimentData.reasoning ||
+    "No synthetic reasoning generated. Run a prompt to initiate swarm analysis.";
+
+  const badgeStyle = isBullish
+    ? "text-teal-400 bg-teal-950/20 border-teal-500/20"
+    : isBearish
+    ? "text-rose-400 bg-rose-950/20 border-rose-500/20"
+    : "text-amber-400 bg-amber-950/20 border-amber-500/20";
+
+  const strokeColor = isBullish ? "#2dd4bf" : isBearish ? "#f43f5e" : "#f59e0b";
+  const glowFilter = isBullish
+    ? "rgba(45,212,191,0.3)"
+    : isBearish
+    ? "rgba(244,63,94,0.3)"
+    : "rgba(245,158,11,0.3)";
+  const scoreTextStyle = isBullish
+    ? "text-teal-400 text-glow-teal"
+    : isBearish
+    ? "text-rose-400"
+    : "text-amber-400";
 
   return (
     <div className="w-full h-[260px] rounded-2xl glass-card gradient-border p-5 flex flex-col group">
@@ -49,13 +70,15 @@ export default function SwarmConsensus({ sentimentData }: { sentimentData: any }
             Swarm Consensus
           </h2>
         </div>
-        {/* Live sentiment badge */}
-        <div className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-lg border ${
-          isBullish 
-            ? 'text-teal-400 bg-teal-950/20 border-teal-500/20' 
-            : 'text-rose-400 bg-rose-950/20 border-rose-500/20'
-        }`}>
-          {isBullish ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+        {/* 3-State Live sentiment badge (BUG-016) */}
+        <div className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-lg border ${badgeStyle}`}>
+          {isBullish ? (
+            <TrendingUp className="w-3 h-3" />
+          ) : isBearish ? (
+            <TrendingDown className="w-3 h-3" />
+          ) : (
+            <Activity className="w-3 h-3" />
+          )}
           {label}
         </div>
       </div>
@@ -63,36 +86,36 @@ export default function SwarmConsensus({ sentimentData }: { sentimentData: any }
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center min-h-0">
         {/* Left: Gauge */}
         <div className="lg:col-span-5 flex flex-col items-center justify-center border-r border-slate-800/30 pr-2 h-full">
-          {/* Semi-circle Gauge */}
           <div className="relative flex flex-col items-center">
             <div className="relative w-28 h-14 overflow-hidden">
-              {/* Background track */}
               <div className="absolute w-28 h-28 rounded-full border-[10px] border-slate-800/60 border-b-transparent border-r-transparent rotate-45" />
-              {/* Animated fill */}
-              <div 
+              <div
                 className="absolute w-28 h-28 rounded-full border-[10px] border-b-transparent border-r-transparent transition-transform duration-1000 ease-out origin-center animate-gauge-fill"
-                style={{ 
+                style={{
                   transform: `rotate(${rotation - 135}deg)`,
-                  borderColor: isBullish ? '#2dd4bf' : '#f43f5e',
-                  borderBottomColor: 'transparent',
-                  borderRightColor: 'transparent',
-                  filter: `drop-shadow(0 0 8px ${isBullish ? 'rgba(45,212,191,0.3)' : 'rgba(244,63,94,0.3)'})`
-                }} 
+                  borderColor: strokeColor,
+                  borderBottomColor: "transparent",
+                  borderRightColor: "transparent",
+                  filter: `drop-shadow(0 0 8px ${glowFilter})`,
+                }}
               />
             </div>
-            {/* Score */}
             <div className="mt-1 text-center">
-              <p className={`text-lg font-bold font-mono tracking-wide ${isBullish ? 'text-teal-400 text-glow-teal' : 'text-rose-400'}`}>
+              <p className={`text-lg font-bold font-mono tracking-wide ${scoreTextStyle}`}>
                 {scorePercent}%
               </p>
-              <p className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">{label}</p>
+              <p className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">
+                {label}
+              </p>
             </div>
           </div>
 
-          {/* Signal Tags */}
           <div className="flex flex-wrap justify-center gap-1 mt-3">
-            {["Volume", "Momentum", "News", "Macro"].map(tag => (
-              <span key={tag} className="text-[8px] font-mono text-slate-400 bg-slate-900/60 border border-slate-800/50 px-1.5 py-0.5 rounded-md transition-all duration-300 hover:border-teal-500/20 hover:text-teal-400/80 cursor-default">
+            {["Volume", "Momentum", "News", "Macro"].map((tag) => (
+              <span
+                key={tag}
+                className="text-[8px] font-mono text-slate-400 bg-slate-900/60 border border-slate-800/50 px-1.5 py-0.5 rounded-md transition-all duration-300 hover:border-teal-500/20 hover:text-teal-400/80 cursor-default"
+              >
                 {tag}
               </span>
             ))}
