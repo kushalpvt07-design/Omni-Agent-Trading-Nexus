@@ -212,42 +212,42 @@ export default function OmniAgentNexus() {
         </header>
 
         {/* ========= INTERACTIVE 6-AGENT NEURAL PIPELINE BAR ========= */}
-        <section className="bento-card rounded-2xl px-5 py-3.5 mb-5">
-          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-            <div className="flex items-center gap-2 shrink-0">
-              <GitBranch className="w-4 h-4 text-teal-600" />
+        <section className="bento-card rounded-2xl px-4 py-3 mb-5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <GitBranch className="w-3.5 h-3.5 text-teal-600"/>
               <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-700">
                 Live 6-Agent Neural Pipeline
               </span>
-              <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">
-                (Click any node to inspect raw telemetry)
+            </div>
+            <span className="text-[10px] font-mono text-slate-400">
+              Click any node to inspect raw telemetry &amp; logs
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-1.5 overflow-x-auto pb-1">
+            {/* 1. Parser */}
+            {renderNodePill(state.agentSteps.parser_node)}
+            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0"/>
+
+            {/* 2. Parallel Bracket: Quant MCP + Sentiment MCP */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-slate-100/90 border border-dashed border-slate-300 shrink-0">
+              <span className="text-[8px] font-mono font-bold uppercase tracking-wider text-teal-700 px-1">
+                Parallel
               </span>
+              {renderNodePill(state.agentSteps.quant_agent_node)}
+              {renderNodePill(state.agentSteps.sentiment_agent_node)}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 overflow-x-auto py-1">
-              {/* 1. Parser */}
-              {renderNodePill(state.agentSteps.parser_node)}
-              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-
-              {/* 2. Parallel Bracket: Quant MCP + Sentiment MCP */}
-              <div className="flex flex-col sm:flex-row items-center gap-1.5 p-1.5 rounded-2xl bg-slate-100/80 border border-dashed border-slate-300">
-                <span className="text-[8px] font-mono font-bold uppercase tracking-widest text-teal-700 px-1.5">
-                  Parallel Fan-Out
-                </span>
-                {renderNodePill(state.agentSteps.quant_agent_node)}
-                {renderNodePill(state.agentSteps.sentiment_agent_node)}
-              </div>
-
-              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-              {/* 3. Orchestrator */}
-              {renderNodePill(state.agentSteps.orchestrator_node)}
-              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-              {/* 4. Risk Desk */}
-              {renderNodePill(state.agentSteps.risk_agent_node)}
-              <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-              {/* 5. Execution Engine */}
-              {renderNodePill(state.agentSteps.execution_agent_node)}
-            </div>
+            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0"/>
+            {/* 3. Orchestrator */}
+            {renderNodePill(state.agentSteps.orchestrator_node)}
+            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0"/>
+            {/* 4. Risk Desk */}
+            {renderNodePill(state.agentSteps.risk_agent_node)}
+            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0"/>
+            {/* 5. Execution Engine */}
+            {renderNodePill(state.agentSteps.execution_agent_node)}
           </div>
         </section>
 

@@ -115,13 +115,23 @@ class Timer:
     def __init__(self, agent_name: str | None = None) -> None:
         self.agent_name = agent_name
         self.start_ns: int = 0
-        self.elapsed_ms: float = 0.0
+        self._final_ms: float | None = None
+
+    @property
+    def elapsed_ms(self) -> float:
+        """Compute live elapsed ms if read inside the `with` block, or final ms after exit."""
+        if self._final_ms is not None:
+            return self._final_ms
+        if self.start_ns == 0:
+            return 0.0
+        return round((time.perf_counter_ns() - self.start_ns) / 1_000_000.0, 2)
 
     def __enter__(self) -> "Timer":
         self.start_ns = time.perf_counter_ns()
+        self._final_ms = None
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.elapsed_ms = round((time.perf_counter_ns() - self.start_ns) / 1_000_000.0, 2)
+        self._final_ms = round((time.perf_counter_ns() - self.start_ns) / 1_000_000.0, 2)
         if self.agent_name:
-            telemetry.record_agent_latency(self.agent_name, self.elapsed_ms)
+            telemetry.record_agent_latency(self.agent_name, self._final_ms)

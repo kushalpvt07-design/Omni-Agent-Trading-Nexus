@@ -241,6 +241,7 @@ export default function AssetIntelligence({ assetData }: { assetData: any }) {
               axisLine={false}
               tickLine={false}
               interval="preserveStartEnd"
+              minTickGap={36}
             />
             <YAxis domain={["auto", "auto"]} hide />
             <Tooltip content={<CustomChartTooltip currencySymbol={currencySymbol} />} />
