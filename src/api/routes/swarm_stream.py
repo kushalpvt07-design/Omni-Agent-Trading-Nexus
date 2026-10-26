@@ -156,7 +156,16 @@ async def websocket_endpoint(
                     None, config=config, stream_mode="updates"
                 ):
                     for node_name, node_state in event.items():
-                        messages = node_state.get("messages", [])
+                        node_lat_map = (
+                            node_state.get("node_latencies_ms", {})
+                            if isinstance(node_state, dict)
+                            else {}
+                        )
+                        messages = (
+                            node_state.get("messages", [])
+                            if isinstance(node_state, dict)
+                            else []
+                        )
                         if messages:
                             content = getattr(
                                 messages[-1], "content", str(messages[-1])
@@ -165,6 +174,8 @@ async def websocket_endpoint(
                                 {
                                     "type": "message",
                                     "role": "Execution Hub",
+                                    "node": node_name,
+                                    "latency_ms": node_lat_map.get(node_name),
                                     "content": content,
                                 }
                             )
@@ -177,7 +188,6 @@ async def websocket_endpoint(
                     }
                 )
 
-                # Push enriched portfolio summary matching PortfolioData interface (BUG-002)
                 try:
                     portfolio_summary = await asyncio.to_thread(
                         build_full_portfolio_summary, user_id
@@ -241,10 +251,17 @@ async def websocket_endpoint(
                     phase_text = PHASE_LABELS.get(
                         node_name, f"Executing node: {node_name}..."
                     )
+                    node_lat_map = (
+                        node_state.get("node_latencies_ms", {})
+                        if isinstance(node_state, dict)
+                        else {}
+                    )
                     await websocket.send_json(
                         {
                             "type": "status",
                             "role": "SYSTEM",
+                            "node": node_name,
+                            "latency_ms": node_lat_map.get(node_name),
                             "content": f"⚡ [PHASE ENTERED] {phase_text}",
                         }
                     )
@@ -257,6 +274,7 @@ async def websocket_endpoint(
                                     {
                                         "type": "message",
                                         "role": "SYSTEM ERROR",
+                                        "node": node_name,
                                         "content": f"🚨 {err}",
                                     }
                                 )
@@ -279,7 +297,6 @@ async def websocket_endpoint(
                             )
                         )
 
-                        # Fetch asset_intelligence only ONCE per directive instead of on every node (BUG-013)
                         if (
                             extracted_ticker
                             and extracted_ticker != "UNKNOWN"
@@ -356,11 +373,12 @@ async def websocket_endpoint(
                                 {
                                     "type": "message",
                                     "role": agent_role,
+                                    "node": node_name,
+                                    "latency_ms": node_lat_map.get(node_name),
                                     "content": content,
                                 }
                             )
 
-            # Record end-to-end analysis latency (Paper Eq. 6 & 7, BUG-007)
             total_pipeline_ms = (time.perf_counter_ns() - pipeline_start_ns) / 1_000_000.0
             telemetry.record_pipeline_run(total_pipeline_ms)
 
@@ -377,6 +395,7 @@ async def websocket_endpoint(
 
                 raw_alloc = proposed_trade.get("allocation")
                 raw_shrs = proposed_trade.get("shares")
+                raw_price = proposed_trade.get("estimated_price")
 
                 try:
                     alloc_val = (
@@ -392,6 +411,13 @@ async def websocket_endpoint(
                 except (ValueError, TypeError):
                     shrs_val = None
 
+                try:
+                    price_val = (
+                        float(raw_price) if raw_price is not None else 0.0
+                    )
+                except (ValueError, TypeError):
+                    price_val = 0.0
+
                 await websocket.send_json(
                     {
                         "type": "checkpoint",
@@ -400,12 +426,14 @@ async def websocket_endpoint(
                         "trade_details": {
                             "ticker": proposed_trade.get("ticker", "UNKNOWN"),
                             "action": proposed_trade.get("action", "REVIEW"),
-                            "allocation": (alloc_val * 100)
+                            "allocation": round(alloc_val * 100, 2)
                             if alloc_val is not None
                             else "TBD",
                             "shares": shrs_val
                             if shrs_val is not None
                             else "TBD",
+                            "estimated_price": price_val,
+                            "reasoning": proposed_trade.get("reasoning", ""),
                         },
                     }
                 )

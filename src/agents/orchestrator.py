@@ -4,44 +4,26 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception,
-)
 from src.state import FinancialSwarmState
 from src.core.telemetry import Timer, telemetry
 
 logger = logging.getLogger("omni-nexus.orchestrator")
 
+# Only models with confirmed active Free Tier quota in your AI Studio dashboard:
+ORCHESTRATOR_MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+
 
 class OrchestratorDirective(BaseModel):
     action: Literal["BUY", "SELL", "HOLD", "REJECT"] = Field(...)
     reasoning: str
-
-
-def _is_retryable_llm_error(exc: BaseException) -> bool:
-    """Only retry transient rate-limit (429) or server (5xx) errors, never 404/auth errors."""
-    msg = str(exc).lower()
-    if any(code in msg for code in ("404", "not_found", "not found", "401", "403", "invalid argument")):
-        return False
-    return True
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-    retry=retry_if_exception(_is_retryable_llm_error),
-    reraise=True,
-)
-async def _invoke_llm_with_backoff(structured_llm, system_prompt: str, analysis_context: str):
-    return await structured_llm.ainvoke(
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=analysis_context),
-        ]
-    )
 
 
 async def orchestrator_node(state: FinancialSwarmState) -> dict:
@@ -117,12 +99,6 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
         requested_quantity = state.get("requested_quantity")
         raw_alloc = state.get("requested_allocation")
 
-        models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-        ]
-
         system_prompt = (
             "You are an elite autonomous financial orchestrator.\n"
             "Analyze the provided quantitative data and qualitative market sentiment to make a final trading decision.\n"
@@ -147,7 +123,8 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
 
         decision = None
         last_error = None
-        for model_name in models_to_try:
+        # Instant failover across independent Free Tier model quota buckets
+        for model_name in ORCHESTRATOR_MODELS_TO_TRY:
             try:
                 llm = ChatGoogleGenerativeAI(
                     model=model_name,
@@ -155,13 +132,17 @@ async def orchestrator_node(state: FinancialSwarmState) -> dict:
                     max_retries=0,
                 )
                 structured_llm = llm.with_structured_output(OrchestratorDirective)
-                decision = await _invoke_llm_with_backoff(
-                    structured_llm, system_prompt, analysis_context
+                decision = await structured_llm.ainvoke(
+                    [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=analysis_context),
+                    ]
                 )
                 if decision:
+                    logger.info("Orchestrator succeeded using model %s", model_name)
                     break
             except Exception as e:
-                logger.warning("Model %s failed in orchestrator_node: %s", model_name, e)
+                logger.warning("Model %s failed in orchestrator_node, failing over immediately: %s", model_name, e)
                 last_error = e
                 continue
 

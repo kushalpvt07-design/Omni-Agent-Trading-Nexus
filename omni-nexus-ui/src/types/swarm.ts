@@ -31,9 +31,39 @@ export interface PortfolioHistory {
   change: PortfolioChange | null;
 }
 
+export interface TradeRecord {
+  ticker: string;
+  action: string;
+  shares: number;
+  price: number;
+  total_value: number;
+  reasoning?: string;
+  alpaca_order_id?: string;
+  created_at: string;
+}
+
 export interface CheckpointDetails {
   ticker: string;
   action: string;
   allocation: number | string;
   shares: number | string;
+  estimated_price?: number;
+  reasoning?: string;
+}
+
+export type AgentNodeId =
+  | "parser_node"
+  | "quant_agent_node"
+  | "sentiment_agent_node"
+  | "orchestrator_node"
+  | "risk_agent_node"
+  | "execution_agent_node";
+
+export interface AgentStepTelemetry {
+  id: AgentNodeId;
+  label: string;
+  shortRole: string;
+  status: "idle" | "running" | "completed" | "error";
+  latencyMs?: number;
+  lastOutput?: string;
 }

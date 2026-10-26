@@ -1,30 +1,84 @@
 "use client";
 
 import React from "react";
-import { Target, Activity, TrendingUp, TrendingDown } from "lucide-react";
+import { Target, Activity, TrendingUp, TrendingDown, Scale } from "lucide-react";
 
-export default function SwarmConsensus({ sentimentData }: { sentimentData: any }) {
+function formatHighlightedReasoning(text: string) {
+  if (!text) return null;
+  // Highlight prices ($323.38), percentages (22.65%), actions (BUY, SELL, HOLD, REJECT), and RSI/SMA tokens
+  const parts = text.split(
+    /(\$[0-9,.]+|₹[0-9,.]+|[0-9]+\.[0-9]+%|\bBUY\b|\bSELL\b|\bHOLD\b|\bREJECT\b|\bRSI(?:\(14\))?\b|\bSMA\b)/g
+  );
+  return parts.map((part, i) => {
+    if (/^(\$|₹)[0-9,.]+$/.test(part) || /^[0-9]+\.[0-9]+%$/.test(part)) {
+      return (
+        <span
+          key={i}
+          className="font-mono font-semibold text-slate-900 bg-white px-1.5 py-0.5 rounded border border-slate-200 mx-0.5"
+        >
+          {part}
+        </span>
+      );
+    }
+    if (part === "BUY") {
+      return (
+        <span
+          key={i}
+          className="font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mx-0.5"
+        >
+          {part}
+        </span>
+      );
+    }
+    if (part === "SELL" || part === "REJECT") {
+      return (
+        <span
+          key={i}
+          className="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 mx-0.5"
+        >
+          {part}
+        </span>
+      );
+    }
+    if (part === "HOLD") {
+      return (
+        <span
+          key={i}
+          className="font-mono font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 mx-0.5"
+        >
+          {part}
+        </span>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
+export default function SwarmConsensus({
+  sentimentData,
+  assetData,
+}: {
+  sentimentData: any;
+  assetData?: any;
+}) {
   if (!sentimentData) {
     return (
-      <div className="w-full h-[260px] rounded-2xl glass-card gradient-border p-5 flex flex-col">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-3">
+      <div className="w-full h-[310px] rounded-2xl bento-card p-5 flex flex-col">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 mb-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center">
-              <Target className="w-3.5 h-3.5 text-teal-400" />
+            <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200 flex items-center justify-center">
+              <Target className="w-3.5 h-3.5 text-teal-600" />
             </div>
-            <h2 className="text-xs tracking-wider font-mono font-semibold text-slate-300 uppercase">
-              Swarm Consensus
+            <h2 className="text-xs tracking-wider font-mono font-bold text-slate-800 uppercase">
+              Swarm Consensus &amp; Synthesis
             </h2>
           </div>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-3">
-          <div className="relative">
-            <div className="w-12 h-12 rounded-full border-2 border-teal-500/15 flex items-center justify-center animate-float">
-              <Target className="w-5 h-5 text-teal-500/30" />
-            </div>
-            <div className="absolute inset-0 rounded-full bg-teal-400/5 blur-xl animate-glow-pulse" />
-          </div>
-          <span className="text-slate-500 font-mono text-xs">Awaiting Swarm Consensus Data...</span>
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
+          <Target className="w-6 h-6 text-slate-400" />
+          <span className="text-slate-500 font-mono text-xs">
+            Awaiting Orchestrator 65/35 synthesis...
+          </span>
         </div>
       </div>
     );
@@ -35,101 +89,107 @@ export default function SwarmConsensus({ sentimentData }: { sentimentData: any }
   const isBullish = rawScore > 0.6;
   const isBearish = rawScore < 0.4;
   const scorePercent = Math.round(rawScore * 100);
-  const rotation = Math.max(0, Math.min(rawScore * 180, 180));
   const reasoning =
     sentimentData.reasoning ||
-    "No synthetic reasoning generated. Run a prompt to initiate swarm analysis.";
+    "Orchestrator synthesis in progress. Evaluating quantitative price action against news polarity.";
+
+  const price = Number(assetData?.current_price ?? 0);
+  const sma = Number(assetData?.thirty_day_sma ?? price);
+  const quantBullish = price >= sma;
 
   const badgeStyle = isBullish
-    ? "text-teal-400 bg-teal-950/20 border-teal-500/20"
+    ? "text-emerald-700 bg-emerald-50 border-emerald-200"
     : isBearish
-    ? "text-rose-400 bg-rose-950/20 border-rose-500/20"
-    : "text-amber-400 bg-amber-950/20 border-amber-500/20";
-
-  const strokeColor = isBullish ? "#2dd4bf" : isBearish ? "#f43f5e" : "#f59e0b";
-  const glowFilter = isBullish
-    ? "rgba(45,212,191,0.3)"
-    : isBearish
-    ? "rgba(244,63,94,0.3)"
-    : "rgba(245,158,11,0.3)";
-  const scoreTextStyle = isBullish
-    ? "text-teal-400 text-glow-teal"
-    : isBearish
-    ? "text-rose-400"
-    : "text-amber-400";
+    ? "text-rose-700 bg-rose-50 border-rose-200"
+    : "text-amber-700 bg-amber-50 border-amber-200";
 
   return (
-    <div className="w-full h-[260px] rounded-2xl glass-card gradient-border p-5 flex flex-col group">
+    <div className="w-full h-[310px] rounded-2xl bento-card p-5 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-3">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 mb-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center transition-all duration-300 group-hover:bg-teal-500/15">
-            <Target className="w-3.5 h-3.5 text-teal-400" />
+          <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200 flex items-center justify-center">
+            <Target className="w-3.5 h-3.5 text-teal-600" />
           </div>
-          <h2 className="text-xs tracking-wider font-mono font-semibold text-slate-200 uppercase">
-            Swarm Consensus
-          </h2>
+          <div>
+            <h2 className="text-xs tracking-wider font-mono font-bold text-slate-900 uppercase">
+              Swarm Consensus
+            </h2>
+            <p className="text-[10px] font-mono text-slate-500">
+              65% Quantitative Technicals • 35% News Polarity
+            </p>
+          </div>
         </div>
-        {/* 3-State Live sentiment badge (BUG-016) */}
-        <div className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-lg border ${badgeStyle}`}>
+
+        <div
+          className={`flex items-center gap-1.5 text-[11px] font-mono font-bold px-2.5 py-1 rounded-lg border ${badgeStyle}`}
+        >
           {isBullish ? (
-            <TrendingUp className="w-3 h-3" />
+            <TrendingUp className="w-3.5 h-3.5" />
           ) : isBearish ? (
-            <TrendingDown className="w-3 h-3" />
+            <TrendingDown className="w-3.5 h-3.5" />
           ) : (
-            <Activity className="w-3 h-3" />
+            <Activity className="w-3.5 h-3.5" />
           )}
-          {label}
+          <span>
+            {scorePercent}% {label}
+          </span>
         </div>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center min-h-0">
-        {/* Left: Gauge */}
-        <div className="lg:col-span-5 flex flex-col items-center justify-center border-r border-slate-800/30 pr-2 h-full">
-          <div className="relative flex flex-col items-center">
-            <div className="relative w-28 h-14 overflow-hidden">
-              <div className="absolute w-28 h-28 rounded-full border-[10px] border-slate-800/60 border-b-transparent border-r-transparent rotate-45" />
-              <div
-                className="absolute w-28 h-28 rounded-full border-[10px] border-b-transparent border-r-transparent transition-transform duration-1000 ease-out origin-center animate-gauge-fill"
-                style={{
-                  transform: `rotate(${rotation - 135}deg)`,
-                  borderColor: strokeColor,
-                  borderBottomColor: "transparent",
-                  borderRightColor: "transparent",
-                  filter: `drop-shadow(0 0 8px ${glowFilter})`,
-                }}
-              />
-            </div>
-            <div className="mt-1 text-center">
-              <p className={`text-lg font-bold font-mono tracking-wide ${scoreTextStyle}`}>
-                {scorePercent}%
-              </p>
-              <p className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">
-                {label}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap justify-center gap-1 mt-3">
-            {["Volume", "Momentum", "News", "Macro"].map((tag) => (
-              <span
-                key={tag}
-                className="text-[8px] font-mono text-slate-400 bg-slate-900/60 border border-slate-800/50 px-1.5 py-0.5 rounded-md transition-all duration-300 hover:border-teal-500/20 hover:text-teal-400/80 cursor-default"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {/* Right: Reasoning */}
-        <div className="lg:col-span-7 flex flex-col h-full justify-start space-y-1.5 pl-2 min-h-0">
-          <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-            <Activity className="w-3 h-3 text-teal-400" /> Orchestrator Synthesis
+      {/* 65% Quant / 35% Sentiment Tug-of-War Weight Bar */}
+      <div className="mb-3 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+        <div className="flex items-center justify-between text-[10px] font-mono mb-1.5">
+          <span className="font-semibold text-slate-700 flex items-center gap-1">
+            <Scale className="w-3 h-3 text-teal-600" />
+            Quant Technicals (65% Wt):{" "}
+            <strong className={quantBullish ? "text-emerald-600" : "text-rose-600"}>
+              {quantBullish ? "Above SMA" : "Below SMA"}
+            </strong>
           </span>
-          <div className="flex-1 text-[11px] text-slate-300/90 font-sans leading-relaxed bg-[#030508]/60 p-3 rounded-xl border border-slate-800/40 overflow-y-auto custom-scrollbar">
-            {reasoning}
-          </div>
+          <span className="font-semibold text-slate-700">
+            News Bias (35% Wt):{" "}
+            <strong
+              className={
+                isBullish
+                  ? "text-emerald-600"
+                  : isBearish
+                  ? "text-rose-600"
+                  : "text-amber-600"
+              }
+            >
+              {label}
+            </strong>
+          </span>
+        </div>
+        <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden flex">
+          <div
+            className={`h-full transition-all duration-500 ${
+              quantBullish ? "bg-teal-600" : "bg-indigo-600"
+            }`}
+            style={{ width: "65%" }}
+          />
+          <div
+            className={`h-full transition-all duration-500 ${
+              isBullish
+                ? "bg-emerald-500"
+                : isBearish
+                ? "bg-rose-500"
+                : "bg-amber-500"
+            }`}
+            style={{ width: "35%" }}
+          />
+        </div>
+      </div>
+
+      {/* Full-Width Scannable Orchestrator Synthesis */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <span className="text-[10px] font-mono font-semibold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+          <Activity className="w-3 h-3 text-teal-600" />
+          Orchestrator Decision Reasoning
+        </span>
+        <div className="flex-1 text-xs text-slate-700 font-sans leading-relaxed bg-[#F8FAFC] p-3.5 rounded-xl border border-slate-200/90 overflow-y-auto custom-scrollbar">
+          {formatHighlightedReasoning(reasoning)}
         </div>
       </div>
     </div>

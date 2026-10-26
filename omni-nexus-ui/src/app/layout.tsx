@@ -15,28 +15,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Omni-Agent Trading Nexus",
+  title: "Omni-Agent Trading Nexus | AI Quant Workbench",
   description:
-    "Autonomous Swarm Financial Execution Engine & Consensus Pipeline — multi-agent AI trading system with Human-in-the-Loop safety.",
-  keywords: [
-    "trading",
-    "AI agents",
-    "LangGraph",
-    "swarm intelligence",
-    "financial analysis",
-  ],
-  openGraph: {
-    title: "Omni-Agent Trading Nexus",
-    description:
-      "Autonomous multi-agent financial analysis and execution system powered by a LangGraph swarm.",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Omni-Agent Trading Nexus",
-    description:
-      "Autonomous multi-agent financial analysis and execution system.",
-  },
+    "Autonomous Multi-Agent Financial Execution Engine & Consensus Pipeline powered by LangGraph and MCP.",
 };
 
 export default function RootLayout({
@@ -47,9 +28,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans bg-[#050810] text-slate-200 overflow-x-hidden">{children}</body>
+      <body className="min-h-full flex flex-col font-sans bg-[#F4F6F9] text-slate-900 overflow-x-hidden selection:bg-teal-500/15 selection:text-teal-900">
+        {children}
+      </body>
     </html>
   );
 }
